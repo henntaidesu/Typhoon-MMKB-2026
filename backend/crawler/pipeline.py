@@ -2,7 +2,9 @@
 
 Order:
   1. IBTrACS  -> typhoon + track_point + affected_region
-  2. GDACS    -> secondary_disaster (matched to KB typhoons)
+  2. Secondary disasters (次生灾害) from official bulletins, matched to KB typhoons:
+       GDACS / ReliefWeb (UN OCHA) / 中央气象台预警 (NMC) /
+       应急管理部 (MEM) / 消防庁 (FDMA)
   3. Digital Typhoon -> satellite media + damage records (per typhoon)
   4. embed    -> backfill semantic vectors
 
@@ -22,8 +24,44 @@ sys.path.insert(0, _HERE)
 sys.path.insert(0, os.path.abspath(os.path.join(_HERE, "..")))
 
 from sources import ibtracs, gdacs, digital_typhoon  # noqa: E402
+from sources import reliefweb, nmc_alarm, mem, fdma  # noqa: E402
 import load  # noqa: E402
 import embed as embed_mod  # noqa: E402
+
+
+def _load_secondary(years: list[int]) -> None:
+    """Ingest 次生灾害 from every official-bulletin source. Each is best-effort:
+    one source failing never blocks the others."""
+
+    def run_src(label: str, fn) -> None:
+        try:
+            recs = fn()
+            n = load.load_disasters(recs)
+            print(f"[pipeline] {label}: matched & loaded {n} disasters")
+        except Exception as e:  # noqa: BLE001
+            print(f"[pipeline] {label} failed: {e}")
+
+    say = lambda m: print(f"[pipeline]{m}")  # noqa: E731
+
+    # 2a. GDACS (per year, name-matched)
+    def _gdacs():
+        out = []
+        for y in years:
+            out += gdacs.parse_events(gdacs.fetch_tc_events(y))
+        return out
+    run_src("GDACS", _gdacs)
+
+    # 2b. ReliefWeb official reports (per year, name-matched)
+    run_src("ReliefWeb", lambda: reliefweb.collect(years, emit=say))
+
+    # 2c. 中央气象台 预警 — current warnings, time/space-matched to active storms
+    run_src("NMC 预警", lambda: nmc_alarm.collect(emit=say))
+
+    # 2d. 应急管理部 灾情通报 — name/time-matched
+    run_src("应急管理部", lambda: mem.collect(emit=say))
+
+    # 2e. 消防庁 被害報 — exact intl_id match (台风第N号)
+    run_src("消防庁", lambda: fdma.collect(emit=say))
 
 
 def run(years: list[int], source: str = "last3years",
@@ -34,16 +72,8 @@ def run(years: list[int], source: str = "last3years",
     n = load.load_typhoons(typhoons)
     print(f"[pipeline] loaded {n} typhoons ({len(years)} season(s))")
 
-    # 2. GDACS secondary disasters
-    total_dis = 0
-    for y in years:
-        try:
-            feats = gdacs.fetch_tc_events(y)
-            recs = gdacs.parse_events(feats)
-            total_dis += load.load_disasters(recs)
-        except Exception as e:  # noqa: BLE001
-            print(f"[pipeline] GDACS {y} failed: {e}")
-    print(f"[pipeline] loaded {total_dis} GDACS disasters (matched to KB)")
+    # 2. Secondary disasters from official bulletins
+    _load_secondary(years)
 
     # 3. Digital Typhoon media + damage (best-effort, per typhoon)
     if with_digital_typhoon:

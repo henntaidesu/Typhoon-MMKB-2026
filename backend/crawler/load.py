@@ -8,10 +8,11 @@ from __future__ import annotations
 
 import os
 import sys
+from datetime import timedelta
 
 from shapely.geometry import LineString, MultiPolygon
 from shapely.geometry import mapping  # noqa: F401
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 _BACKEND = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -103,14 +104,102 @@ def _match_typhoon(session: Session, name: str | None, year: int | None) -> Typh
     return session.scalar(stmt)
 
 
+# How far outside a typhoon's [start, end] window a secondary disaster can still
+# be attributed to it: storms build a day or two before, and floods / landslides
+# / casualty tolls keep accruing for up to a week after the storm has passed.
+_PAD_BEFORE = timedelta(days=2)
+_PAD_AFTER = timedelta(days=7)
+# Max distance (degrees, ~110 km) from a typhoon's impact corridor for a
+# located-but-unnamed warning to be tied to it.
+_MAX_MATCH_DEG = 3.0
+
+
+def _match_typhoon_by_time_space(
+    session: Session, event_time, lat, lon, year: int | None
+) -> Typhoon | None:
+    """Attribute an unnamed official warning/bulletin to whichever typhoon was
+    active near that place and time — used for feeds (NMC 预警) that don't quote a
+    storm name. Prefers the storm whose impact corridor is nearest the point;
+    falls back to the one whose window is temporally closest."""
+    if event_time is None:
+        return None
+    stmt = (
+        select(Typhoon)
+        .where(
+            Typhoon.start_time.isnot(None),
+            Typhoon.end_time.isnot(None),
+            Typhoon.start_time <= event_time + _PAD_BEFORE,
+            Typhoon.end_time >= event_time - _PAD_AFTER,
+        )
+    )
+    if year:
+        stmt = stmt.where(Typhoon.season_year == year)
+    cands = session.scalars(stmt).all()
+    if not cands:
+        return None
+    if len(cands) == 1 and (lat is None or lon is None):
+        return cands[0]
+
+    ids = [c.id for c in cands]
+    if lat is not None and lon is not None:
+        pt = func.ST_GeomFromEWKT(_wkt_point(lon, lat))
+        row = session.execute(
+            select(AffectedRegion.typhoon_id,
+                   func.ST_Distance(AffectedRegion.geom, pt).label("d"))
+            .where(AffectedRegion.typhoon_id.in_(ids))
+            .order_by("d").limit(1)
+        ).first()
+        if row is not None and row.d is not None and row.d <= _MAX_MATCH_DEG:
+            return session.get(Typhoon, row.typhoon_id)
+
+    # No usable location — pick the storm whose active window is closest in time.
+    return min(cands, key=lambda t: min(
+        abs((event_time - t.start_time).total_seconds()),
+        abs((event_time - t.end_time).total_seconds()),
+    ))
+
+
+def _resolve_typhoon(session: Session, r) -> Typhoon | None:
+    """Try the strongest available link in order: exact WMO id -> storm name ->
+    time/space proximity."""
+    intl_id = getattr(r, "intl_id", None)
+    if intl_id:
+        obj = session.scalar(select(Typhoon).where(Typhoon.intl_id == intl_id))
+        if obj is not None:
+            return obj
+    obj = _match_typhoon(session, r.typhoon_name, r.season_year)
+    if obj is not None:
+        return obj
+    return _match_typhoon_by_time_space(
+        session, r.event_time, r.lat, r.lon, r.season_year
+    )
+
+
+def _disaster_exists(session: Session, typhoon_id: int, r) -> bool:
+    """Idempotency guard so re-ingesting the same feed doesn't duplicate rows."""
+    stmt = select(SecondaryDisaster.id).where(
+        SecondaryDisaster.typhoon_id == typhoon_id,
+        SecondaryDisaster.source == r.source,
+    )
+    url = getattr(r, "source_url", None)
+    if url:
+        stmt = stmt.where(SecondaryDisaster.source_url == url)
+    else:
+        stmt = stmt.where(SecondaryDisaster.description == r.description)
+    return session.scalar(stmt) is not None
+
+
 def load_disasters(records) -> int:
-    """Match GDACS DisasterRec to KB typhoons and insert SecondaryDisaster rows."""
+    """Match secondary-disaster records (GDACS / ReliefWeb / NMC / MEM / FDMA) to
+    KB typhoons and insert SecondaryDisaster rows. Idempotent."""
     n = 0
     with SessionLocal() as session:
         for r in records:
-            t = _match_typhoon(session, r.typhoon_name, r.season_year)
+            t = _resolve_typhoon(session, r)
             if t is None:
-                continue  # not a WP typhoon in our KB
+                continue  # can't tie it to a WP typhoon in our KB
+            if _disaster_exists(session, t.id, r):
+                continue
             geom = _wkt_point(r.lon, r.lat) if (r.lon is not None and r.lat is not None) else None
             session.add(SecondaryDisaster(
                 typhoon_id=t.id, disaster_type=r.disaster_type, geom=geom,
@@ -147,10 +236,6 @@ def load_media_and_damage(intl_id: str, dt_result) -> None:
                 source_url=f"http://agora.ex.nii.ac.jp/digital-typhoon/summary/wnp/s/{dt_result.dtid}.html.en",
             ))
         session.commit()
-
-
-# func imported lazily to keep top clean
-from sqlalchemy import func  # noqa: E402
 
 
 # --- Multi-agency actual-track loading (实况路径) -----------------------------
@@ -195,6 +280,17 @@ def _apply_meta(obj: Typhoon, st, agency: str, authoritative: bool) -> None:
     put("end_time", max(times) if times else None)
     if authoritative or obj.source is None:
         obj.source = agency
+
+    # Active state: the authoritative source (CMA) sets it definitively; a
+    # non-authoritative agency may only upgrade an unknown/ended storm to active
+    # (it still lists it), never override CMA's 'ended'.
+    if st.active is not None:
+        if authoritative:
+            obj.is_active = st.active
+        elif st.active and obj.is_active is not True:
+            obj.is_active = True
+        elif obj.is_active is None:
+            obj.is_active = st.active
 
 
 def load_agency_storms(storms, agency: str, authoritative: bool = False) -> tuple[int, int]:

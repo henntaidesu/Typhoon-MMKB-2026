@@ -93,8 +93,19 @@ function ensureForm(list) {
 
 function parseYears(v) {
   if (!v || !String(v).trim()) return null
-  const arr = String(v).split(/[,，\s]+/).map((x) => parseInt(x, 10)).filter((n) => !Number.isNaN(n))
-  return arr.length ? arr : null
+  const out = []
+  for (const tok of String(v).split(/[,，\s]+/).filter(Boolean)) {
+    const range = tok.match(/^(\d{4})\s*[-—~]\s*(\d{4})$/)
+    if (range) {
+      let [a, b] = [parseInt(range[1], 10), parseInt(range[2], 10)]
+      if (a > b) [a, b] = [b, a]
+      for (let y = a; y <= b; y++) out.push(y)
+    } else {
+      const n = parseInt(tok, 10)
+      if (!Number.isNaN(n)) out.push(n)
+    }
+  }
+  return out.length ? Array.from(new Set(out)) : null
 }
 
 async function loadList() {

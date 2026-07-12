@@ -36,9 +36,12 @@ SOURCES = [
         "name": "中央气象台 · 实况路径",
         "provider": "CMA 中国气象局 (typhoon.nmc.cn)",
         "kind": "台风实况路径",
-        "description": "官方实况路径：本季度每个台风（含正在活动的）实际观测走过的"
-                       "逐点轨迹，随台风移动实时更新。是路径的权威主源。",
-        "params": [],
+        "description": "官方实况路径：每个台风实际观测走过的逐点轨迹。留空=抓取本季"
+                       "（含活跃台风，实时更新）；填年份可批量收集历史数据。",
+        "params": [
+            {"name": "years", "type": "years",
+             "label": "年份(逗号分隔/范围如2015-2024,留空=本季实况)", "default": ""},
+        ],
     },
     {
         "key": "jma",
@@ -188,8 +191,9 @@ def _run_cma(params: dict, emit) -> dict:
     from crawler.sources import cma
     from crawler import load, embed as embed_mod
 
-    emit("获取 CMA 中央气象台台风列表 …")
-    storms = cma.fetch_storms(emit=emit)
+    years = params.get("years") or None
+    emit(f"获取 CMA 中央气象台台风列表（{years or '本季实况'}）…")
+    storms = cma.fetch_storms(years=years, emit=emit)
     emit(f"解析到 {len(storms)} 个台风的实况路径，写入数据库 …")
     nty, npt = load.load_agency_storms(storms, agency="CMA", authoritative=True)
     emit(f"已写入 {nty} 个台风 / {npt} 个实况点，生成语义向量 …")

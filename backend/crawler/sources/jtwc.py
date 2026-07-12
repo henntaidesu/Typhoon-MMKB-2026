@@ -97,6 +97,7 @@ def fetch_storms(emit=lambda m: None) -> list[AgencyStorm]:
         storms.append(AgencyStorm(
             intl_id=intl_id, name=name.title(),
             season_year=2000 + int(yy), category=grade, points=points,
+            active=True,  # JTWC RSS only carries storms under active warning
         ))
     if not storms:
         emit("  JTWC 当前无可解析的活跃西太平洋台风")

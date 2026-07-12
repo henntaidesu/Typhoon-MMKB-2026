@@ -13,6 +13,7 @@ from datetime import datetime
 from geoalchemy2 import Geometry
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
+    Boolean,
     DateTime,
     Float,
     ForeignKey,
@@ -48,6 +49,9 @@ class Typhoon(Base):
     start_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     end_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     source: Mapped[str | None] = mapped_column(String(32))
+    # Whether the typhoon is still ongoing (from CMA start/stop status, or any
+    # agency still listing it as an active storm). None = unknown / not crawled.
+    is_active: Mapped[bool | None] = mapped_column(Boolean, index=True)
 
     # Semantic layer: a readable multilingual summary and its embedding.
     summary_text: Mapped[str | None] = mapped_column(Text)

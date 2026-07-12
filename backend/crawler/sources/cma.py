@@ -21,6 +21,7 @@ from crawler.sources.common import (
 )
 
 LIST_URL = "http://typhoon.nmc.cn/weatherservice/typhoon/jsons/list_default"
+LIST_YEAR_URL = "http://typhoon.nmc.cn/weatherservice/typhoon/jsons/list_{year}"
 VIEW_URL = "http://typhoon.nmc.cn/weatherservice/typhoon/jsons/view_{id}"
 _H = {"User-Agent": "Mozilla/5.0", "Referer": "http://typhoon.nmc.cn/"}
 
@@ -46,51 +47,75 @@ def _jsonp(text: str):
     return json.loads(text[min(starts):max(ends) + 1])
 
 
-def fetch_storms(year: int | None = None, emit=lambda m: None) -> list[AgencyStorm]:
-    data = _jsonp(_get(LIST_URL))
-    rows = data.get("typhoonList", [])
-    storms: list[AgencyStorm] = []
-    for row in rows:
-        internal_id = row[0]
-        name_en = row[1] if len(row) > 1 else None
-        tfbh = str(row[3]) if len(row) > 3 and row[3] is not None else ""
-        # Real WMO 编号 is 4 digits (YYNN). Unnamed depressions carry an 8-digit
-        # internal placeholder instead — skip those.
-        if not tfbh.isdigit() or len(tfbh) != 4:
-            continue
-        season = 2000 + int(tfbh[:2])
-        if year and season != year:
-            continue
+def _parse_row(row, emit) -> AgencyStorm | None:
+    """One typhoonList row -> AgencyStorm (fetches its view for the track)."""
+    internal_id = row[0]
+    name_en = row[1] if len(row) > 1 else None
+    tfbh = str(row[3]) if len(row) > 3 and row[3] is not None else ""
+    # Real WMO 编号 is 4 digits YYNN with storm-number >= 1. Unnamed systems use
+    # an 8-digit placeholder (default list) or the "2000" sentinel (yearly list)
+    # — both are filtered out here.
+    if not tfbh.isdigit() or len(tfbh) != 4 or int(tfbh[2:]) < 1:
+        return None
+    season = 2000 + int(tfbh[:2])
 
-        emit(f"  {tfbh} {name_en} 拉取实况路径 …")
+    emit(f"  {tfbh} {name_en} 拉取实况路径 …")
+    try:
+        vd = _jsonp(_get(VIEW_URL.format(id=internal_id)))
+        arr = vd["typhoon"]
+        raw = arr[8] if len(arr) > 8 and isinstance(arr[8], list) else []
+    except Exception as e:  # noqa: BLE001
+        emit(f"  {tfbh} 跳过（{e}）")
+        return None
+
+    points: list[ObsPoint] = []
+    for p in raw:
         try:
-            vd = _jsonp(_get(VIEW_URL.format(id=internal_id)))
-            arr = vd["typhoon"]
-            raw = arr[8] if len(arr) > 8 and isinstance(arr[8], list) else []
-        except Exception as e:  # noqa: BLE001
-            emit(f"  {tfbh} 跳过（{e}）")
+            obs = datetime.fromtimestamp(p[2] / 1000, tz=timezone.utc)
+            lon, lat = float(p[4]), float(p[5])
+        except (TypeError, ValueError, IndexError):
             continue
-
-        points: list[ObsPoint] = []
-        for p in raw:
-            try:
-                obs = datetime.fromtimestamp(p[2] / 1000, tz=timezone.utc)
-                lon, lat = float(p[4]), float(p[5])
-            except (TypeError, ValueError, IndexError):
-                continue
-            points.append(ObsPoint(
-                obs_time=obs, lat=lat, lon=lon,
-                wind_kt=ms_to_kt(num(p[7])) if len(p) > 7 else None,
-                pressure_hpa=num(p[6]) if len(p) > 6 else None,
-                grade=p[3] if len(p) > 3 else None,
-                move_dir=compass_to_deg(p[8]) if len(p) > 8 else None,
-                move_speed=num(p[9]) if len(p) > 9 else None,
-            ))
-        if not points:
-            continue
-        name = None if not name_en or name_en.lower() in ("nameless", "unnamed") else name_en.title()
-        storms.append(AgencyStorm(
-            intl_id=tfbh, name=name, season_year=season,
-            category=strongest_grade(pt.grade for pt in points), points=points,
+        points.append(ObsPoint(
+            obs_time=obs, lat=lat, lon=lon,
+            wind_kt=ms_to_kt(num(p[7])) if len(p) > 7 else None,
+            pressure_hpa=num(p[6]) if len(p) > 6 else None,
+            grade=p[3] if len(p) > 3 else None,
+            move_dir=compass_to_deg(p[8]) if len(p) > 8 else None,
+            move_speed=num(p[9]) if len(p) > 9 else None,
         ))
+    if not points:
+        return None
+    name = None if not name_en or name_en.lower() in ("nameless", "unnamed") else name_en.title()
+    status = str(row[7]).lower() if len(row) > 7 and row[7] is not None else ""
+    return AgencyStorm(
+        intl_id=tfbh, name=name, season_year=season,
+        category=strongest_grade(pt.grade for pt in points), points=points,
+        active=(status == "start"),  # CMA: 'start' = ongoing, 'stop' = ended
+    )
+
+
+def fetch_storms(years=None, emit=lambda m: None) -> list[AgencyStorm]:
+    """Collect CMA actual tracks. `years` empty/None -> current season (live,
+    via list_default). Otherwise iterate the per-year archive list_{year} for
+    each requested year, so historical seasons can be ingested too."""
+    if years:
+        catalogs = [(y, LIST_YEAR_URL.format(year=int(y))) for y in years]
+    else:
+        catalogs = [(None, LIST_URL)]
+
+    storms: list[AgencyStorm] = []
+    for yr, url in catalogs:
+        emit(f"获取 CMA 台风列表（{yr or '本季实况'}）…")
+        try:
+            rows = _jsonp(_get(url)).get("typhoonList", [])
+        except Exception as e:  # noqa: BLE001
+            emit(f"  列表 {yr} 获取失败（{e}），跳过")
+            continue
+        n0 = len(storms)
+        for row in rows:
+            st = _parse_row(row, emit)
+            if st:
+                storms.append(st)
+        emit(f"  {yr or '本季'}: 收集到 {len(storms) - n0} 个台风")
     return storms
+

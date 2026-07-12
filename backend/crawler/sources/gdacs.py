@@ -12,7 +12,6 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-from dataclasses import dataclass
 from datetime import datetime, timezone
 
 import httpx
@@ -21,23 +20,10 @@ _BACKEND = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if _BACKEND not in sys.path:
     sys.path.insert(0, _BACKEND)
 
+from crawler.sources.disaster_common import DisasterRec  # noqa: E402
+
 # GDACS public geo-event feed (GeoJSON). eventtype=TC for tropical cyclones.
 GDACS_SEARCH = "https://www.gdacs.org/gdacsapi/api/events/geteventlist/SEARCH"
-
-
-@dataclass
-class DisasterRec:
-    typhoon_name: str | None
-    season_year: int | None
-    disaster_type: str
-    lat: float | None
-    lon: float | None
-    event_time: datetime | None
-    casualties: int | None
-    economic_loss_usd: float | None
-    description: str
-    source: str
-    source_url: str | None
 
 
 def fetch_tc_events(year: int) -> list[dict]:

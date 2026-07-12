@@ -6,6 +6,11 @@
     </div>
     <table>
       <tbody>
+        <tr><td>状态</td><td>
+          <span class="status" :class="t.is_active ? 'live' : 'ended'">
+            {{ t.is_active ? '● 进行中' : '已结束' }}
+          </span>
+        </td></tr>
         <tr><td>季节</td><td>{{ t.season_year }}</td></tr>
         <tr><td>等级</td><td>{{ t.category || '—' }}</td></tr>
         <tr><td>峰值风速</td><td>{{ t.max_wind_kt ?? '?' }} kt</td></tr>
@@ -68,6 +73,8 @@ h4 { margin: 16px 0 6px; font-size: 13px; color: #33435a; }
 table { width: 100%; font-size: 13px; border-collapse: collapse; }
 td { padding: 4px 0; }
 td:first-child { color: #6b7787; width: 78px; }
+.status.live { color: #e0392b; font-weight: 700; }
+.status.ended { color: #6b7787; }
 .spark { width: 100%; height: 80px; background: #f4f7fb; border-radius: 6px; }
 .legend { font-size: 11px; margin-top: 4px; }
 .legend .w { color: #c0392b; margin-right: 10px; }

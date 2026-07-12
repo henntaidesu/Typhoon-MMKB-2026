@@ -84,5 +84,6 @@ def fetch_storms(emit=lambda m: None) -> list[AgencyStorm]:
         storms.append(AgencyStorm(
             intl_id=number, name=(name.title() if name else None),
             season_year=season, category=category, points=points,
+            active=True,  # JMA's targetTc list only contains currently active TCs
         ))
     return storms

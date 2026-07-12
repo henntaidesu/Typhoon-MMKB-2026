@@ -16,6 +16,7 @@ class TyphoonBrief(BaseModel):
     min_pressure_hpa: float | None
     start_time: datetime | None
     end_time: datetime | None
+    is_active: bool | None = None
     disaster_count: int | None = None
     distance: float | None = None  # semantic distance when returned from search
 

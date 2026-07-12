@@ -30,6 +30,7 @@ class AgencyStorm:
     season_year: int | None
     category: str | None
     points: list[ObsPoint] = field(default_factory=list)
+    active: bool | None = None   # still ongoing? (None = source doesn't say)
 
 
 def num(v) -> float | None:
