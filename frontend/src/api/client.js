@@ -35,6 +35,12 @@ export default {
   spatiotemporal: (params) => get('/search/spatiotemporal', params),
   hybrid: (params) => get('/search/hybrid', params),
   stats: () => get('/search/stats'),
+  // Geographic impact analytics (统计 page)
+  statsByCountry: () => get('/stats/by-country'),
+  statsByRegion: (params) => get('/stats/by-region', params),
+  landfallGeojson: (params) => get('/stats/landfall-geojson', params),
+  typhoonCountries: (id) => get(`/typhoons/${id}/countries`),
+  typhoonLandfalls: (id) => get(`/typhoons/${id}/landfalls`),
   // Data sources (数据源 page)
   listSources: () => get('/sources'),
   sourcesStatus: () => get('/sources/status'),

@@ -1,19 +1,20 @@
 <template>
   <div class="app-shell">
     <nav class="topnav">
-      <div class="nav-brand">台风 MMKB</div>
-      <button :class="{ active: view === 'map' }" @click="view = 'map'">地图</button>
-      <button :class="{ active: view === 'sources' }" @click="view = 'sources'">数据源</button>
+      <div class="nav-brand">{{ t('nav.brand') }}</div>
+      <button :class="{ active: view === 'map' }" @click="view = 'map'">{{ t('nav.map') }}</button>
+      <button :class="{ active: view === 'stats' }" @click="view = 'stats'">{{ t('nav.stats') }}</button>
+      <button :class="{ active: view === 'sources' }" @click="view = 'sources'">{{ t('nav.sources') }}</button>
+      <select class="lang-select" :value="locale" @change="setLocale($event.target.value)">
+        <option v-for="l in SUPPORTED" :key="l" :value="l">{{ messages[l].langName }}</option>
+      </select>
     </nav>
 
     <DataSources v-show="view === 'sources'" class="view" />
+    <StatsView v-if="view === 'stats'" class="view" />
 
     <div class="layout" v-show="view === 'map'">
     <aside class="sidebar">
-      <header class="brand">
-        <div class="title">台风多媒体知识库</div>
-        <div class="sub">West Pacific Typhoon MMKB · 时空间 + 语义</div>
-      </header>
       <SemanticSearchBox />
       <TyphoonList />
     </aside>
@@ -22,11 +23,11 @@
       <MapView />
       <TimelineSlider />
       <div class="legend-card">
-        <div><span class="sw" style="background:#c0392b"></span>Cat4-5</div>
-        <div><span class="sw" style="background:#e67e22"></span>Cat3</div>
-        <div><span class="sw" style="background:#f39c12"></span>Cat1-2</div>
-        <div><span class="sw" style="background:#2ecc71"></span>TS</div>
-        <div><span class="sw" style="background:#3498db"></span>TD</div>
+        <div><span class="sw" style="background:#c0392b"></span>{{ t('legend.cat45') }}</div>
+        <div><span class="sw" style="background:#e67e22"></span>{{ t('legend.cat3') }}</div>
+        <div><span class="sw" style="background:#f39c12"></span>{{ t('legend.cat12') }}</div>
+        <div><span class="sw" style="background:#2ecc71"></span>{{ t('legend.ts') }}</div>
+        <div><span class="sw" style="background:#3498db"></span>{{ t('legend.td') }}</div>
       </div>
     </main>
 
@@ -41,6 +42,8 @@
 
 <script setup>
 import { onMounted, ref } from 'vue'
+import { useI18n } from 'vue-i18n'
+import { SUPPORTED, setLocale } from './i18n'
 import L from 'leaflet'
 import markerIcon from 'leaflet/dist/images/marker-icon.png'
 import markerIcon2x from 'leaflet/dist/images/marker-icon-2x.png'
@@ -52,8 +55,10 @@ import SemanticSearchBox from './components/SemanticSearchBox.vue'
 import TimelineSlider from './components/TimelineSlider.vue'
 import DetailPanel from './components/DetailPanel.vue'
 import DataSources from './components/DataSources.vue'
+import StatsView from './components/StatsView.vue'
 
-const view = ref('map')  // 'map' | 'sources'
+const { t, locale, messages } = useI18n()
+const view = ref('map')  // 'map' | 'stats' | 'sources'
 
 // Fix Leaflet's default marker icon paths under Vite bundling.
 L.Icon.Default.mergeOptions({
@@ -77,6 +82,12 @@ onMounted(() => store.loadList())
 }
 .topnav button:hover { color: #fff; background: rgba(255, 255, 255, .08); }
 .topnav button.active { color: #fff; background: rgba(255, 255, 255, .16); }
+.lang-select {
+  margin-left: auto; background: rgba(255, 255, 255, .1); color: #fff;
+  border: 1px solid rgba(255, 255, 255, .2); border-radius: 6px;
+  padding: 5px 8px; font-size: 13px; cursor: pointer;
+}
+.lang-select option { color: #1a2233; }
 .view { flex: 1; min-height: 0; background: #eef1f5; }
 .layout { display: flex; flex: 1; min-height: 0; }
 .sidebar { width: var(--sidebar-w); background: #fff; display: flex; flex-direction: column; border-right: 1px solid #dde3ea; z-index: 600; }

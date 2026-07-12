@@ -41,6 +41,25 @@ def fetch_tc_events(year: int) -> list[dict]:
     return data.get("features", [])
 
 
+def _affected_countries(val) -> str | None:
+    """Normalize GDACS 'affectedcountries' (list of dicts / list of str / str)
+    into a comma-separated country-name string, or None."""
+    if not val:
+        return None
+    if isinstance(val, str):
+        return val.strip() or None
+    names: list[str] = []
+    if isinstance(val, list):
+        for item in val:
+            if isinstance(item, dict):
+                nm = item.get("countryname") or item.get("name") or item.get("iso3")
+                if nm:
+                    names.append(str(nm).strip())
+            elif item:
+                names.append(str(item).strip())
+    return ", ".join(dict.fromkeys(n for n in names if n)) or None
+
+
 def parse_events(features: list[dict]) -> list[DisasterRec]:
     recs: list[DisasterRec] = []
     for f in features:
@@ -56,7 +75,9 @@ def parse_events(features: list[dict]) -> list[DisasterRec]:
             ts = None
         if ts and ts.tzinfo is None:
             ts = ts.replace(tzinfo=timezone.utc)
-        pop = p.get("affectedcountries")
+        # affectedcountries is a list of {iso3, countryname} (or a string) — pull
+        # the human-readable names so the affected country is preserved.
+        region = _affected_countries(p.get("affectedcountries"))
         recs.append(DisasterRec(
             typhoon_name=(name.title() if name else None),
             season_year=ts.year if ts else None,
@@ -65,9 +86,11 @@ def parse_events(features: list[dict]) -> list[DisasterRec]:
             casualties=None,
             economic_loss_usd=None,
             description=(f"GDACS {p.get('alertlevel','')} alert: {p.get('htmldescription') or p.get('description') or name}. "
-                         f"Severity: {sev.get('severitytext','')}."),
+                         f"Severity: {sev.get('severitytext','')}."
+                         + (f" Affected: {region}." if region else "")),
             source="GDACS",
             source_url=p.get("url", {}).get("report") if isinstance(p.get("url"), dict) else p.get("link"),
+            region_name=region,
         ))
     return recs
 

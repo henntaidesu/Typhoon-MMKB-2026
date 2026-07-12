@@ -2,21 +2,23 @@
   <div class="sem">
     <div class="row">
       <input v-model="q" @keyup.enter="run"
-             placeholder="语义联想检索，如：造成严重洪水的强台风" />
-      <button @click="run" :disabled="store.loading">检索</button>
+             :placeholder="t('search.placeholder')" />
+      <button @click="run" :disabled="store.loading">{{ t('search.button') }}</button>
     </div>
     <div class="hint">
-      基于多语言向量(pgvector 余弦)。支持中/日/英，例如
+      {{ t('search.hint') }}
       <a @click="quick('typhoon that caused severe flooding and landslides')">severe flooding</a> ·
       <a @click="quick('高潮・暴風による沿岸被害')">高潮被害</a>
     </div>
-    <button v-if="store.semanticHits.size" class="clear" @click="reset">清除语义筛选，返回全部</button>
+    <button v-if="store.semanticHits.size" class="clear" @click="reset">{{ t('search.clear') }}</button>
   </div>
 </template>
 
 <script setup>
 import { ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { useTyphoonStore } from '../stores/typhoon'
+const { t } = useI18n()
 const store = useTyphoonStore()
 const q = ref('')
 function run() { if (q.value.trim()) store.semanticSearch(q.value.trim()) }

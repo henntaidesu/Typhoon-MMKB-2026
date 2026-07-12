@@ -22,7 +22,7 @@ if _BACKEND not in sys.path:
 from config import SRID  # noqa: E402
 from db import SessionLocal  # noqa: E402
 from models import (  # noqa: E402
-    AffectedRegion, MediaAsset, SecondaryDisaster, Typhoon, TrackPoint,
+    AdminRegion, AffectedRegion, MediaAsset, SecondaryDisaster, Typhoon, TrackPoint,
 )
 
 
@@ -211,6 +211,7 @@ def load_disasters(records) -> int:
                 lat=r.lat, lon=r.lon, event_time=r.event_time,
                 casualties=r.casualties, economic_loss_usd=r.economic_loss_usd,
                 description=r.description, source=r.source, source_url=r.source_url,
+                region_name=getattr(r, "region_name", None),
             ))
             n += 1
         session.commit()
@@ -382,3 +383,31 @@ def load_agency_storms(storms, agency: str, authoritative: bool = False) -> tupl
             n_ty += 1
         session.commit()
     return n_ty, n_pt
+
+
+# --- Reference administrative boundaries (Natural Earth) ---------------------
+def load_admin_regions(records) -> int:
+    """Upsert Natural Earth admin regions (countries + provinces) into the
+    reference table. Keyed on ne_id, so re-running only updates. Returns count."""
+    n = 0
+    with SessionLocal() as session:
+        for r in records:
+            obj = session.scalar(select(AdminRegion).where(AdminRegion.ne_id == r.ne_id))
+            if obj is None:
+                obj = AdminRegion(ne_id=r.ne_id)
+                session.add(obj)
+            obj.name = r.name
+            obj.name_local = r.name_local
+            obj.iso_a2 = r.iso_a2
+            obj.iso_a3 = r.iso_a3
+            obj.admin_level = r.admin_level
+            obj.country = r.country
+            obj.geom = f"SRID={SRID};{r.wkt}"
+            n += 1
+        session.commit()
+    return n
+
+
+def admin_region_count() -> int:
+    with SessionLocal() as session:
+        return session.scalar(select(func.count()).select_from(AdminRegion)) or 0

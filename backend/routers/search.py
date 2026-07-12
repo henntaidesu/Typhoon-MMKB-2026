@@ -13,7 +13,7 @@ from sqlalchemy import and_, func, select
 from sqlalchemy.orm import Session
 
 from db import get_session
-from models import SecondaryDisaster, Typhoon, TrackPoint
+from models import AdminRegion, Landfall, SecondaryDisaster, Typhoon, TrackPoint, TyphoonRegionImpact
 from schemas import SemanticQuery, TyphoonBrief
 from services.semantic import semantic_disasters, semantic_typhoons
 
@@ -105,9 +105,20 @@ def stats(session: Session = Depends(get_session)):
     by_type = session.execute(
         select(SecondaryDisaster.disaster_type, func.count()).group_by(SecondaryDisaster.disaster_type)
     ).all()
+    # Top affected countries by distinct typhoons (admin-0 impacts).
+    top_countries = session.execute(
+        select(AdminRegion.name,
+               func.count(func.distinct(TyphoonRegionImpact.typhoon_id)).label("count"))
+        .join(TyphoonRegionImpact, TyphoonRegionImpact.admin_region_id == AdminRegion.id)
+        .where(AdminRegion.admin_level == 0)
+        .group_by(AdminRegion.name).order_by(func.count(
+            func.distinct(TyphoonRegionImpact.typhoon_id)).desc()).limit(10)
+    ).all()
     return {
         "typhoons_by_year": [{"year": y, "count": c} for y, c in by_year],
         "disasters_by_type": [{"type": t, "count": c} for t, c in by_type],
+        "top_countries": [{"country": n, "count": c} for n, c in top_countries],
         "total_typhoons": session.scalar(select(func.count()).select_from(Typhoon)),
         "total_disasters": session.scalar(select(func.count()).select_from(SecondaryDisaster)),
+        "total_landfalls": session.scalar(select(func.count()).select_from(Landfall)),
     }

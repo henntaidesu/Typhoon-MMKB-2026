@@ -1,39 +1,49 @@
 <template>
   <div v-if="t" class="detail">
     <div class="head">
-      <h3>{{ t.name || '(未命名)' }} <span class="id">#{{ t.intl_id }}</span></h3>
+      <h3>{{ t.name || $t('detail.unnamed') }} <span class="id">#{{ t.intl_id }}</span></h3>
       <button class="x" @click="store.selectedId = null">×</button>
     </div>
     <table>
       <tbody>
-        <tr><td>状态</td><td>
+        <tr><td>{{ $t('detail.status') }}</td><td>
           <span class="status" :class="t.is_active ? 'live' : 'ended'">
-            {{ t.is_active ? '● 进行中' : '已结束' }}
+            {{ t.is_active ? $t('detail.active') : $t('detail.ended') }}
           </span>
         </td></tr>
-        <tr><td>季节</td><td>{{ t.season_year }}</td></tr>
-        <tr><td>等级</td><td>{{ t.category || '—' }}</td></tr>
-        <tr><td>峰值风速</td><td>{{ t.max_wind_kt ?? '?' }} kt</td></tr>
-        <tr><td>最低气压</td><td>{{ t.min_pressure_hpa ?? '?' }} hPa</td></tr>
-        <tr><td>起止</td><td>{{ fmt(t.start_time) }} → {{ fmt(t.end_time) }}</td></tr>
+        <tr><td>{{ $t('detail.season') }}</td><td>{{ t.season_year }}</td></tr>
+        <tr><td>{{ $t('detail.category') }}</td><td>{{ t.category || '—' }}</td></tr>
+        <tr><td>{{ $t('detail.peakWind') }}</td><td>{{ t.max_wind_kt ?? '?' }} kt</td></tr>
+        <tr><td>{{ $t('detail.minPressure') }}</td><td>{{ t.min_pressure_hpa ?? '?' }} hPa</td></tr>
+        <tr><td>{{ $t('detail.period') }}</td><td>{{ fmt(t.start_time) }} → {{ fmt(t.end_time) }}</td></tr>
       </tbody>
     </table>
 
-    <h4>强度曲线</h4>
+    <h4>{{ $t('detail.intensityCurve') }}</h4>
     <svg class="spark" viewBox="0 0 300 80" preserveAspectRatio="none">
       <polyline :points="windPath" fill="none" stroke="#c0392b" stroke-width="2" />
       <polyline :points="presPath" fill="none" stroke="#0b6bcb" stroke-width="1.5" />
     </svg>
-    <div class="legend"><span class="w">— 风速</span><span class="p">— 气压</span></div>
+    <div class="legend"><span class="w">— {{ $t('detail.wind') }}</span><span class="p">— {{ $t('detail.pressure') }}</span></div>
 
-    <h4>次生灾害 ({{ disasterCount }})</h4>
+    <h4>{{ $t('detail.affectedRegions') }} ({{ countries.length }})</h4>
+    <ul class="regs">
+      <li v-for="c in countries" :key="c.admin_region_id">
+        <span class="rn">{{ c.name }}</span>
+        <span v-if="c.country && c.admin_level === 1" class="parent">· {{ c.country }}</span>
+        <span v-if="c.landfall" class="lf">{{ $t('detail.landfall') }}</span>
+      </li>
+      <li v-if="!countries.length" class="empty">{{ $t('detail.noRecords') }}</li>
+    </ul>
+
+    <h4>{{ $t('detail.disasters') }} ({{ disasterCount }})</h4>
     <ul class="dis">
       <li v-for="d in disasters" :key="d.properties.id">
         <b>{{ d.properties.disaster_type }}</b>
-        <span v-if="d.properties.casualties"> · 伤亡 {{ d.properties.casualties }}</span>
+        <span v-if="d.properties.casualties"> · {{ $t('detail.casualties') }} {{ d.properties.casualties }}</span>
         <div class="d">{{ (d.properties.description || '').slice(0, 120) }}</div>
       </li>
-      <li v-if="!disasters.length" class="empty">无记录</li>
+      <li v-if="!disasters.length" class="empty">{{ $t('detail.noRecords') }}</li>
     </ul>
   </div>
 </template>
@@ -46,6 +56,7 @@ const t = computed(() => store.selected)
 const pts = computed(() => store.trackPoints)
 const disasters = computed(() => store.disasters?.features || [])
 const disasterCount = computed(() => disasters.value.length)
+const countries = computed(() => store.countries || [])
 
 function fmt(s) { return s ? s.slice(0, 10) : '—' }
 
@@ -83,4 +94,9 @@ td:first-child { color: #6b7787; width: 78px; }
 .dis li { padding: 7px 0; border-bottom: 1px solid #eef1f5; font-size: 13px; }
 .dis .d { color: #6b7787; font-size: 12px; margin-top: 2px; }
 .dis .empty { color: #98a4b3; }
+.regs { list-style: none; padding: 0; margin: 6px 0 0; display: flex; flex-wrap: wrap; gap: 6px; }
+.regs li { font-size: 12px; background: #f0f4f9; border-radius: 6px; padding: 3px 8px; color: #33435a; }
+.regs .parent { color: #98a4b3; margin-left: 3px; }
+.regs .lf { margin-left: 5px; background: #c0392b; color: #fff; border-radius: 4px; padding: 0 5px; font-size: 11px; }
+.regs .empty { background: none; color: #98a4b3; padding: 4px 0; }
 </style>

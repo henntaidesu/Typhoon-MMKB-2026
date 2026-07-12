@@ -2,11 +2,13 @@
 
 Order:
   1. IBTrACS  -> typhoon + track_point + affected_region
+  1.5 Natural Earth -> admin_region reference boundaries (once)
   2. Secondary disasters (次生灾害) from official bulletins, matched to KB typhoons:
        GDACS / ReliefWeb (UN OCHA) / 中央气象台预警 (NMC) /
        应急管理部 (MEM) / 消防庁 (FDMA)
   3. Digital Typhoon -> satellite media + damage records (per typhoon)
   4. embed    -> backfill semantic vectors
+  5. enrich   -> typhoon_region_impact + landfall (geographic impact)
 
 Idempotent: safe to re-run. Requires the DB to be initialized first
 (python backend/init_db.py) and reachable.
@@ -25,8 +27,10 @@ sys.path.insert(0, os.path.abspath(os.path.join(_HERE, "..")))
 
 from sources import ibtracs, gdacs, digital_typhoon  # noqa: E402
 from sources import reliefweb, nmc_alarm, mem, fdma, hko, jma_warning  # noqa: E402
+from sources import naturalearth  # noqa: E402
 import load  # noqa: E402
 import embed as embed_mod  # noqa: E402
+import enrich as enrich_mod  # noqa: E402
 
 
 def _load_secondary(years: list[int]) -> None:
@@ -78,6 +82,13 @@ def run(years: list[int], source: str = "last3years",
     n = load.load_typhoons(typhoons)
     print(f"[pipeline] loaded {n} typhoons ({len(years)} season(s))")
 
+    # 1.5 Reference admin boundaries (only if not yet loaded) — needed for the
+    #     geographic impact enrichment in step 5.
+    if load.admin_region_count() == 0:
+        recs = naturalearth.parse()
+        m = load.load_admin_regions(recs)
+        print(f"[pipeline] loaded {m} admin regions (countries + provinces)")
+
     # 2. Secondary disasters from official bulletins
     _load_secondary(years)
 
@@ -97,6 +108,14 @@ def run(years: list[int], source: str = "last3years",
     # 4. Embeddings
     nt, nd = embed_mod.backfill()
     print(f"[pipeline] embedded {nt} typhoons, {nd} disasters")
+
+    # 5. Geographic impact enrichment (affected regions + landfalls)
+    try:
+        gt, glf = enrich_mod.backfill()
+        print(f"[pipeline] geo-enriched {gt} typhoons, {glf} landfalls")
+    except Exception as e:  # noqa: BLE001 — never let enrichment abort the run
+        print(f"[pipeline] geo enrichment skipped: {e}")
+
     print("[pipeline] done.")
 
 

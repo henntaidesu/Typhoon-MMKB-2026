@@ -6,7 +6,10 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from db import get_session
-from models import AffectedRegion, SecondaryDisaster, Typhoon, TrackPoint
+from models import (
+    AdminRegion, AffectedRegion, Landfall, SecondaryDisaster, Typhoon,
+    TrackPoint, TyphoonRegionImpact,
+)
 from schemas import TyphoonBrief
 
 router = APIRouter(prefix="/typhoons", tags=["typhoons"])
@@ -125,4 +128,53 @@ def get_regions(tid: int, session: Session = Depends(get_session)):
          "properties": {"id": rid, "region_name": rn, "impact_type": it}}
         for rid, rn, it, geo in rows if geo
     ]
+    return {"type": "FeatureCollection", "features": feats}
+
+
+@router.get("/{tid}/countries")
+def get_countries(tid: int, session: Session = Depends(get_session)):
+    """Administrative regions (countries + provinces) this typhoon affected —
+    the 'which countries/regions were affected' answer. Most-impacted first."""
+    rows = session.execute(
+        select(TyphoonRegionImpact, AdminRegion)
+        .join(AdminRegion, AdminRegion.id == TyphoonRegionImpact.admin_region_id)
+        .where(TyphoonRegionImpact.typhoon_id == tid)
+    ).all()
+    out = [
+        {"admin_region_id": ar.id, "name": ar.name, "iso_a3": ar.iso_a3,
+         "admin_level": ar.admin_level, "country": ar.country,
+         "passed_over": imp.passed_over, "landfall": imp.landfall,
+         "within_corridor": imp.within_corridor,
+         "min_distance_deg": (round(imp.min_distance_deg, 3)
+                              if imp.min_distance_deg is not None else None),
+         "max_wind_kt": imp.max_wind_kt,
+         "landfall_time": imp.landfall_time.isoformat() if imp.landfall_time else None}
+        for imp, ar in rows
+    ]
+    # Landfall regions first, then those the eye passed over, then by proximity.
+    out.sort(key=lambda r: (not r["landfall"], not r["passed_over"],
+                            r["min_distance_deg"] if r["min_distance_deg"] is not None else 1e9))
+    return out
+
+
+@router.get("/{tid}/landfalls")
+def get_landfalls(tid: int, session: Session = Depends(get_session)):
+    """Landfall events for this typhoon as a GeoJSON Point FeatureCollection."""
+    rows = session.scalars(
+        select(Landfall).where(Landfall.typhoon_id == tid).order_by(Landfall.landfall_time)
+    ).all()
+    feats = []
+    for lf in rows:
+        if lf.lon is None or lf.lat is None:
+            continue
+        feats.append({
+            "type": "Feature",
+            "geometry": {"type": "Point", "coordinates": [lf.lon, lf.lat]},
+            "properties": {
+                "id": lf.id, "country": lf.country,
+                "admin_region_id": lf.admin_region_id,
+                "landfall_time": lf.landfall_time.isoformat() if lf.landfall_time else None,
+                "wind_kt": lf.wind_kt, "pressure_hpa": lf.pressure_hpa, "grade": lf.grade,
+            },
+        })
     return {"type": "FeatureCollection", "features": feats}

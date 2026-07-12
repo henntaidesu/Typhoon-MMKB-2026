@@ -21,6 +21,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
@@ -67,6 +68,14 @@ class Typhoon(Base):
         back_populates="typhoon", cascade="all, delete-orphan"
     )
     media: Mapped[list["MediaAsset"]] = relationship(
+        back_populates="typhoon", cascade="all, delete-orphan"
+    )
+    # Derived geographic impact (populated by crawler/enrich.py from the track +
+    # the admin_region reference boundaries).
+    region_impacts: Mapped[list["TyphoonRegionImpact"]] = relationship(
+        back_populates="typhoon", cascade="all, delete-orphan"
+    )
+    landfalls: Mapped[list["Landfall"]] = relationship(
         back_populates="typhoon", cascade="all, delete-orphan"
     )
 
@@ -154,6 +163,11 @@ class SecondaryDisaster(Base):
     description: Mapped[str | None] = mapped_column(Text)
     source: Mapped[str | None] = mapped_column(String(32))
     source_url: Mapped[str | None] = mapped_column(Text)
+    # Affected country/province as reported by the source feed (GDACS country,
+    # ReliefWeb primary_country, NMC province, JMA prefecture, HKO "Hong Kong").
+    # Human-readable hint; the structured geographic attribution lives in
+    # typhoon_region_impact / landfall.
+    region_name: Mapped[str | None] = mapped_column(String(128))
     embedding: Mapped[list[float] | None] = mapped_column(Vector(EMBEDDING_DIM))
 
     typhoon: Mapped["Typhoon"] = relationship(back_populates="disasters")
@@ -185,3 +199,89 @@ class MediaAsset(Base):
     captured_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     typhoon: Mapped["Typhoon"] = relationship(back_populates="media")
+
+
+class AdminRegion(Base):
+    """Reference administrative boundary (country / province) from Natural Earth.
+
+    This is a *reference* table (not owned by any typhoon): the derived impact
+    and landfall facts point into it. Loaded once via crawler/sources/
+    naturalearth.py + load.load_admin_regions."""
+
+    __tablename__ = "admin_region"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    # Natural Earth stable feature id — the idempotency key for upserts.
+    ne_id: Mapped[str] = mapped_column(String(32), unique=True, index=True)
+    name: Mapped[str | None] = mapped_column(String(128))
+    name_local: Mapped[str | None] = mapped_column(String(128))
+    iso_a2: Mapped[str | None] = mapped_column(String(2), index=True)
+    iso_a3: Mapped[str | None] = mapped_column(String(3), index=True)
+    admin_level: Mapped[int | None] = mapped_column(Integer, index=True)  # 0 country, 1 province
+    country: Mapped[str | None] = mapped_column(String(128), index=True)  # parent country (for admin-1 grouping)
+    geom: Mapped[object] = mapped_column(Geometry("MULTIPOLYGON", srid=SRID, spatial_index=False))
+
+    __table_args__ = (
+        Index("ix_admin_region_geom", "geom", postgresql_using="gist"),
+    )
+
+
+class TyphoonRegionImpact(Base):
+    """Which administrative regions a typhoon affected (derived, one row per
+    typhoon × region). Answers 'which countries / provinces were affected'."""
+
+    __tablename__ = "typhoon_region_impact"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    typhoon_id: Mapped[int] = mapped_column(
+        ForeignKey("typhoon.id", ondelete="CASCADE"), index=True
+    )
+    admin_region_id: Mapped[int] = mapped_column(
+        ForeignKey("admin_region.id", ondelete="CASCADE"), index=True
+    )
+    within_corridor: Mapped[bool | None] = mapped_column(Boolean)  # region ∩ wind corridor
+    passed_over: Mapped[bool | None] = mapped_column(Boolean)      # track line crossed the polygon
+    landfall: Mapped[bool | None] = mapped_column(Boolean)         # ≥1 landfall event in this region
+    min_distance_deg: Mapped[float | None] = mapped_column(Float)  # track → region distance (degrees)
+    max_wind_kt: Mapped[float | None] = mapped_column(Float)       # strongest fix over/near the region
+    first_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    landfall_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    typhoon: Mapped["Typhoon"] = relationship(back_populates="region_impacts")
+    admin_region: Mapped["AdminRegion"] = relationship()
+
+    __table_args__ = (
+        UniqueConstraint("typhoon_id", "admin_region_id", name="uq_typhoon_region"),
+    )
+
+
+class Landfall(Base):
+    """A discrete landfall event — where the track crossed from sea to land.
+    Supports 'how many times region X was hit by a typhoon landfall'."""
+
+    __tablename__ = "landfall"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    typhoon_id: Mapped[int] = mapped_column(
+        ForeignKey("typhoon.id", ondelete="CASCADE"), index=True
+    )
+    # Most-specific region at the crossing (admin-1 if resolvable, else admin-0).
+    admin_region_id: Mapped[int | None] = mapped_column(
+        ForeignKey("admin_region.id", ondelete="SET NULL"), index=True
+    )
+    country: Mapped[str | None] = mapped_column(String(128), index=True)  # denormalized for fast grouping
+    landfall_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    lat: Mapped[float | None] = mapped_column(Float)
+    lon: Mapped[float | None] = mapped_column(Float)
+    wind_kt: Mapped[float | None] = mapped_column(Float)
+    pressure_hpa: Mapped[float | None] = mapped_column(Float)
+    grade: Mapped[str | None] = mapped_column(String(32))
+    geom: Mapped[object | None] = mapped_column(Geometry("POINT", srid=SRID, spatial_index=False))
+
+    typhoon: Mapped["Typhoon"] = relationship(back_populates="landfalls")
+    admin_region: Mapped["AdminRegion"] = relationship()
+
+    __table_args__ = (
+        Index("ix_landfall_geom", "geom", postgresql_using="gist"),
+    )

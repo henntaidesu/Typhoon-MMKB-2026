@@ -9,6 +9,8 @@ export const useTyphoonStore = defineStore('typhoon', {
     track: null,         // GeoJSON Feature (LineString)
     disasters: null,     // GeoJSON FeatureCollection
     regions: null,       // GeoJSON FeatureCollection
+    countries: [],       // affected admin regions [{name, iso_a3, landfall, ...}]
+    landfalls: null,     // GeoJSON FeatureCollection (landfall points)
     semanticHits: new Set(), // ids highlighted by semantic search
     timeIndex: 0,        // current index along the track for playback
     loading: false,
@@ -33,14 +35,18 @@ export const useTyphoonStore = defineStore('typhoon', {
     async select(id) {
       this.selectedId = id
       this.timeIndex = 0
-      this.track = this.disasters = this.regions = null
+      this.track = this.disasters = this.regions = this.landfalls = null
+      this.countries = []
       try {
-        const [track, disasters, regions] = await Promise.all([
+        const [track, disasters, regions, countries, landfalls] = await Promise.all([
           api.getTrack(id).catch(() => null),
           api.getDisasters(id).catch(() => null),
           api.getRegions(id).catch(() => null),
+          api.typhoonCountries(id).catch(() => []),
+          api.typhoonLandfalls(id).catch(() => null),
         ])
         this.track = track; this.disasters = disasters; this.regions = regions
+        this.countries = countries || []; this.landfalls = landfalls
         this.timeIndex = (track?.properties?.points?.length || 1) - 1
       } catch (e) { this.error = String(e) }
     },

@@ -4,7 +4,7 @@
       <div class="ds-head-row">
         <div></div>
         <button class="update-btn" :disabled="busy" @click="startUpdate">
-          {{ updateState.status === 'running' ? '更新中…' : '更新进行中数据' }}
+          {{ updateState.status === 'running' ? t('sources.updating') : t('sources.updateData') }}
         </button>
       </div>
       <div v-if="updateState.message" class="update-msg" :class="{ err: updateState.status === 'error' }">
@@ -12,7 +12,7 @@
       </div>
     </header>
 
-    <div v-if="loadErr" class="ds-err">加载失败：{{ loadErr }}</div>
+    <div v-if="loadErr" class="ds-err">{{ t('sources.loadFailed') }}{{ loadErr }}</div>
 
     <div class="grid">
       <article
@@ -50,7 +50,7 @@
           :disabled="busy || s.state?.status === 'running'"
           @click="start(s)"
         >
-          {{ s.state?.status === 'running' ? '爬取中…' : '开始爬取' }}
+          {{ s.state?.status === 'running' ? t('sources.crawling') : t('sources.startCrawl') }}
         </button>
       </article>
     </div>
@@ -59,7 +59,10 @@
 
 <script setup>
 import { reactive, ref, onMounted, onUnmounted, h } from 'vue'
+import { useI18n } from 'vue-i18n'
 import api from '../api/client'
+
+const { t } = useI18n()
 
 const sources = ref([])
 const form = reactive({})       // key -> { paramName: value }
@@ -71,10 +74,10 @@ let timer = null
 // Small inline status badge component.
 const StatusBadge = (props) => {
   const map = {
-    running: ['运行中', '#0b6bcb'],
-    done: ['完成', '#2e9e5b'],
-    error: ['失败', '#d64545'],
-    idle: ['待运行', '#98a4b3'],
+    running: [t('sources.statusRunning'), '#0b6bcb'],
+    done: [t('sources.statusDone'), '#2e9e5b'],
+    error: [t('sources.statusError'), '#d64545'],
+    idle: [t('sources.statusIdle'), '#98a4b3'],
   }
   const [txt, color] = map[props.status] || map.idle
   return h('span', { class: 'badge', style: { background: color } }, txt)
@@ -145,7 +148,7 @@ async function startUpdate() {
   try {
     await api.startCrawl('update', {})
     updateState.status = 'running'
-    updateState.message = '启动中…'
+    updateState.message = t('sources.starting')
     busy.value = true
   } catch (e) {
     alert(e.message || String(e))
@@ -159,7 +162,7 @@ async function start(s) {
   if ('years' in f) body.years = parseYears(f.years)
   try {
     const res = await api.startCrawl(s.key, body)
-    s.state = { status: 'running', message: '启动中…', counts: {} }
+    s.state = { status: 'running', message: t('sources.starting'), counts: {} }
     busy.value = true
   } catch (e) {
     alert(e.message || String(e))

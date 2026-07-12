@@ -66,6 +66,21 @@ SOURCES = [
         ],
     },
     {
+        "key": "naturalearth",
+        "name": "Natural Earth 行政边界",
+        "provider": "Natural Earth (public domain)",
+        "kind": "基础地理边界",
+        "params": [],
+    },
+    {
+        "key": "geo_impact",
+        "name": "地理影响分析",
+        "provider": "派生：轨迹 × 行政边界",
+        "kind": "地理影响分析",
+        "depends": "naturalearth",
+        "params": [],
+    },
+    {
         "key": "digital_typhoon",
         "name": "Digital Typhoon",
         "provider": "NII 情報学研究所",
@@ -387,6 +402,36 @@ def _run_digital_typhoon(params: dict, emit) -> dict:
     return {"处理": done, "新增向量": nd}
 
 
+def _run_naturalearth(params: dict, emit) -> dict:
+    """Load Natural Earth admin-0 countries + admin-1 provinces into the
+    reference table (idempotent by ne_id)."""
+    from crawler.sources import naturalearth
+    from crawler import load
+
+    emit("下载并解析 Natural Earth 行政边界（国家 + 省/县）…")
+    recs = naturalearth.parse()
+    n0 = sum(1 for r in recs if r.admin_level == 0)
+    n1 = sum(1 for r in recs if r.admin_level == 1)
+    emit(f"解析到 {len(recs)} 个区域（{n0} 国家 / {n1} 省），写入数据库 …")
+    n = load.load_admin_regions(recs)
+    emit(f"完成：库内共 {load.admin_region_count()} 个行政区域。")
+    return {"国家": n0, "省/县": n1, "库内区域": load.admin_region_count()}
+
+
+def _run_geo_impact(params: dict, emit) -> dict:
+    """Derive per-typhoon affected regions + landfall events by spatially joining
+    tracks against the admin_region boundaries. Incremental (skips already-done)."""
+    from crawler import load, enrich
+
+    if load.admin_region_count() == 0:
+        raise RuntimeError("行政边界为空：请先运行「Natural Earth 行政边界」。")
+    force = bool(params.get("force"))
+    emit("计算台风地理影响与登陆点（轨迹 × 行政边界）…")
+    nt, nlf = enrich.backfill(force=force)
+    emit(f"完成：处理 {nt} 个台风，识别 {nlf} 次登陆。")
+    return {"处理台风": nt, "登陆次数": nlf}
+
+
 def _run_update(params: dict, emit) -> dict:
     """Fast refresh of only the currently active (进行中) typhoons — re-pulls the
     live CMA track for each active storm plus the current JMA/JTWC realtime fix.
@@ -427,6 +472,8 @@ RUNNERS = {
     "jma": _run_jma,
     "jtwc": _run_jtwc,
     "gdacs": _run_gdacs,
+    "naturalearth": _run_naturalearth,
+    "geo_impact": _run_geo_impact,
     "digital_typhoon": _run_digital_typhoon,
     "ibtracs": _run_ibtracs,
     "update": _run_update,

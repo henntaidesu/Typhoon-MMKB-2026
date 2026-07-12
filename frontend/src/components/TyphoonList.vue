@@ -1,17 +1,17 @@
 <template>
   <div class="list">
     <div class="filters">
-      <input v-model.number="store.filters.year" type="number" placeholder="年份" @keyup.enter="store.loadList()" />
-      <input v-model="store.filters.name" placeholder="名称" @keyup.enter="store.loadList()" />
-      <button @click="store.loadList()">筛选</button>
+      <input v-model.number="store.filters.year" type="number" :placeholder="$t('list.yearPlaceholder')" @keyup.enter="store.loadList()" />
+      <input v-model="store.filters.name" :placeholder="$t('list.namePlaceholder')" @keyup.enter="store.loadList()" />
+      <button @click="store.loadList()">{{ $t('list.filter') }}</button>
     </div>
-    <div v-if="store.loading" class="msg">加载中…</div>
+    <div v-if="store.loading" class="msg">{{ $t('list.loading') }}</div>
     <div v-else-if="store.error" class="msg err">{{ store.error }}</div>
     <template v-else>
       <!-- 进行中：平铺 -->
       <section v-show="active.length" class="group">
         <h4 class="group-head active">
-          <span class="gdot active"></span>进行中<span class="count">{{ active.length }}</span>
+          <span class="gdot active"></span>{{ $t('list.active') }}<span class="count">{{ active.length }}</span>
         </h4>
         <ul>
           <li v-for="t in active" :key="t.id"
@@ -19,14 +19,14 @@
               @click="store.select(t.id)">
             <div class="name">
               <span class="dot" :style="{ background: catColor(t.max_wind_kt) }"></span>
-              {{ t.name || '(未命名)' }} <span class="id">#{{ t.intl_id }}</span>
+              {{ t.name || $t('list.unnamed') }} <span class="id">#{{ t.intl_id }}</span>
             </div>
             <div class="meta">
-              {{ t.category || '—' }} · 峰值 {{ t.max_wind_kt ?? '?' }} kt
-              <span v-if="t.distance != null" class="sim">语义距离 {{ t.distance }}</span>
+              {{ t.category || '—' }} · {{ $t('list.peak') }} {{ t.max_wind_kt ?? '?' }} kt
+              <span v-if="t.distance != null" class="sim">{{ $t('list.semanticDistance') }} {{ t.distance }}</span>
             </div>
             <div class="dates">
-              {{ fmtDate(t.start_time) }} · <span class="live">至今 {{ fmtDate(t.end_time, true) }}</span>
+              {{ fmtDate(t.start_time) }} · <span class="live">{{ $t('list.untilNow') }} {{ fmtDate(t.end_time, true) }}</span>
             </div>
           </li>
         </ul>
@@ -35,16 +35,17 @@
       <!-- 已结束：按年份分组，可收缩 -->
       <section v-show="endedTotal" class="group">
         <h4 class="group-head ended">
-          <span class="gdot ended"></span>已结束<span class="count">{{ endedTotal }}</span>
+          <span class="gdot ended"></span>{{ $t('list.ended') }}<span class="count">{{ endedTotal }}</span>
         </h4>
         <div class="year-tools" v-if="endedByYear.length > 1">
-          <button @click="setAll(true)">全部展开</button>
-          <button @click="setAll(false)">全部收起</button>
+          <button @click="setAll(true)">{{ $t('list.expandAll') }}</button>
+          <button @click="setAll(false)">{{ $t('list.collapseAll') }}</button>
         </div>
         <div v-for="yg in endedByYear" :key="yg.year" class="year-group">
           <button class="year-head" @click="toggleYear(yg.year)">
             <span class="chev">{{ isYearOpen(yg.year) ? '▾' : '▸' }}</span>
-            {{ yg.year }}<span class="yunit">年</span>
+            <template v-if="yg.year === UNKNOWN_YEAR">{{ $t('list.unknownYear') }}</template>
+            <template v-else>{{ yg.year }}<span class="yunit">{{ $t('list.yearUnit') }}</span></template>
             <span class="count">{{ yg.items.length }}</span>
           </button>
           <ul v-show="isYearOpen(yg.year)">
@@ -53,11 +54,11 @@
                 @click="store.select(t.id)">
               <div class="name">
                 <span class="dot" :style="{ background: catColor(t.max_wind_kt) }"></span>
-                {{ t.name || '(未命名)' }} <span class="id">#{{ t.intl_id }}</span>
+                {{ t.name || $t('list.unnamed') }} <span class="id">#{{ t.intl_id }}</span>
               </div>
               <div class="meta">
-                {{ t.category || '—' }} · 峰值 {{ t.max_wind_kt ?? '?' }} kt
-                <span v-if="t.distance != null" class="sim">语义距离 {{ t.distance }}</span>
+                {{ t.category || '—' }} · {{ $t('list.peak') }} {{ t.max_wind_kt ?? '?' }} kt
+                <span v-if="t.distance != null" class="sim">{{ $t('list.semanticDistance') }} {{ t.distance }}</span>
               </div>
               <div class="dates">{{ fmtDate(t.start_time) }} → {{ fmtDate(t.end_time) }}</div>
             </li>
@@ -65,7 +66,7 @@
         </div>
       </section>
     </template>
-    <div v-if="!store.loading && !store.list.length" class="msg">无数据（数据库未就绪或无匹配）</div>
+    <div v-if="!store.loading && !store.list.length" class="msg">{{ $t('list.noData') }}</div>
   </div>
 </template>
 
@@ -73,6 +74,9 @@
 import { computed, reactive } from 'vue'
 import { useTyphoonStore } from '../stores/typhoon'
 const store = useTyphoonStore()
+
+// Sentinel for typhoons without a season year; rendered via $t('list.unknownYear').
+const UNKNOWN_YEAR = '__unknown__'
 
 const active = computed(() => store.list.filter((t) => t.is_active))
 const ended = computed(() => store.list.filter((t) => !t.is_active))
@@ -82,15 +86,15 @@ const endedTotal = computed(() => ended.value.length)
 const endedByYear = computed(() => {
   const m = new Map()
   for (const t of ended.value) {
-    const y = t.season_year ?? '未知'
+    const y = t.season_year ?? UNKNOWN_YEAR
     if (!m.has(y)) m.set(y, [])
     m.get(y).push(t)
   }
   return [...m.entries()]
     .map(([year, items]) => ({ year, items }))
     .sort((a, b) => {
-      if (a.year === '未知') return 1
-      if (b.year === '未知') return -1
+      if (a.year === UNKNOWN_YEAR) return 1
+      if (b.year === UNKNOWN_YEAR) return -1
       return b.year - a.year
     })
 })

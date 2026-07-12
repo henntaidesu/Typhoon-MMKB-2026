@@ -1,6 +1,6 @@
 <template>
   <div v-if="points.length" class="timeline">
-    <button @click="toggle">{{ playing ? '⏸' : '▶' }}</button>
+    <button @click="toggle" :title="playing ? $t('timeline.pause') : $t('timeline.play')">{{ playing ? '⏸' : '▶' }}</button>
     <input type="range" min="0" :max="points.length - 1" :value="store.timeIndex"
            @input="store.setTimeIndex(+$event.target.value)" />
     <div class="label">

@@ -4,15 +4,18 @@
 
 <script setup>
 import { onMounted, ref, watch } from 'vue'
+import { useI18n } from 'vue-i18n'
 import L from 'leaflet'
 import { useTyphoonStore } from '../stores/typhoon'
 
+const { t } = useI18n()
 const store = useTyphoonStore()
 const mapEl = ref(null)
 let map = null
 let trackLayer = null
 let regionLayer = null
 let disasterLayer = null
+let landfallLayer = null
 let cursor = null // moving position marker
 
 // Saffir-Simpson-ish color ramp by max sustained wind (kt).
@@ -79,9 +82,27 @@ watch(() => store.disasters, (disasters) => {
       const p = f.properties
       layer.bindPopup(
         `<b>${p.disaster_type}</b><br>${(p.description || '').slice(0, 200)}<br>` +
-        (p.casualties ? `伤亡: ${p.casualties}<br>` : '') +
-        (p.source ? `来源: ${p.source}` : '') +
-        (p.source_url ? ` · <a href="${p.source_url}" target="_blank">链接</a>` : ''),
+        (p.casualties ? `${t('map.casualties')}: ${p.casualties}<br>` : '') +
+        (p.source ? `${t('map.source')}: ${p.source}` : '') +
+        (p.source_url ? ` · <a href="${p.source_url}" target="_blank">${t('map.link')}</a>` : ''),
+      )
+    },
+  }).addTo(map)
+})
+
+watch(() => store.landfalls, (landfalls) => {
+  landfallLayer = clear(landfallLayer)
+  if (!landfalls?.features?.length) return
+  landfallLayer = L.geoJSON(landfalls, {
+    pointToLayer: (f, latlng) => L.circleMarker(latlng, {
+      radius: 7, color: '#7b241c', weight: 2, fillColor: '#e0392b', fillOpacity: 0.95,
+    }),
+    onEachFeature: (f, layer) => {
+      const p = f.properties
+      layer.bindTooltip(
+        `<b>${t('detail.landfall')}</b> ${p.country || ''}<br>` +
+        `${(p.landfall_time || '').slice(0, 16)}<br>` +
+        `wind ${p.wind_kt ?? '?'} kt · ${p.pressure_hpa ?? '?'} hPa`,
       )
     },
   }).addTo(map)
