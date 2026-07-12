@@ -27,20 +27,45 @@ if _BACKEND not in sys.path:
 
 
 # --- Source catalogue (drives the cards shown in the UI) --------------------
+# Track sources are the official agencies' ACTUAL (实况) real-time tracks, not
+# post-season best-track. CMA is the authoritative/richest; JMA & JTWC enrich
+# the same typhoon (matched by WMO number) with their own official fixes.
 SOURCES = [
     {
-        "key": "ibtracs",
-        "name": "IBTrACS 最佳路径",
-        "provider": "NOAA / NCEI",
-        "kind": "台风路径",
-        "description": "西北太平洋热带气旋最佳路径：台风本体、逐点路径、"
-                       "以及由路径推导的影响走廊。是整个知识库的核心数据源。",
-        "params": [
-            {"name": "variant", "type": "select", "label": "数据集",
-             "options": ["last3years", "WP", "since1980"], "default": "last3years"},
-            {"name": "years", "type": "years", "label": "年份(逗号分隔,留空=全部)",
-             "default": ""},
-        ],
+        "key": "cma",
+        "name": "中央气象台 · 实况路径",
+        "provider": "CMA 中国气象局 (typhoon.nmc.cn)",
+        "kind": "台风实况路径",
+        "description": "官方实况路径：本季度每个台风（含正在活动的）实际观测走过的"
+                       "逐点轨迹，随台风移动实时更新。是路径的权威主源。",
+        "params": [],
+    },
+    {
+        "key": "jma",
+        "name": "日本气象厅 · 实况",
+        "provider": "JMA / RSMC 东京",
+        "kind": "台风实况",
+        "description": "西北太平洋 WMO 指定官方机构 (RSMC)。抓取当前活跃台风的"
+                       "「実況 / Analysis」定位作为 JMA 官方实况点。",
+        "params": [],
+    },
+    {
+        "key": "jtwc",
+        "name": "JTWC · 实况",
+        "provider": "JTWC 美国联合台风警报中心",
+        "kind": "台风实况",
+        "description": "读取 JTWC 实时警报，解析当前西太平洋活跃台风的最新定位。"
+                       "尽力解析：无活跃台风或警报已撤时可能无数据（属正常）。",
+        "params": [],
+    },
+    {
+        "key": "full",
+        "name": "全部官方实况源",
+        "provider": "CMA + JMA + JTWC",
+        "kind": "一键实况",
+        "description": "依次执行三家官方机构的实况路径抓取并生成语义向量，"
+                       "同一台风按编号自动合并各家的实况点。",
+        "params": [],
     },
     {
         "key": "gdacs",
@@ -49,10 +74,10 @@ SOURCES = [
         "kind": "次生灾害",
         "description": "全球灾害预警系统的热带气旋事件，按名称+年份匹配到已入库的"
                        "台风，生成次生灾害记录（风暴潮 / 风灾等）。",
-        "depends": "ibtracs",
+        "depends": "cma",
         "params": [
             {"name": "years", "type": "years", "label": "年份(逗号分隔)",
-             "default": "2023,2024"},
+             "default": "2026"},
         ],
     },
     {
@@ -62,21 +87,8 @@ SOURCES = [
         "kind": "卫星影像 / 灾情",
         "description": "为库内每个台风抓取代表性卫星云图与灾情/伤亡文本"
                        "（日文页面，尽力解析，缺失自动跳过）。",
-        "depends": "ibtracs",
+        "depends": "cma",
         "params": [],
-    },
-    {
-        "key": "full",
-        "name": "完整入库流程",
-        "provider": "IBTrACS + GDACS + Digital Typhoon",
-        "kind": "一键全量",
-        "description": "依次执行三个数据源并生成语义向量，一步建成知识库。",
-        "params": [
-            {"name": "variant", "type": "select", "label": "IBTrACS 数据集",
-             "options": ["last3years", "WP", "since1980"], "default": "last3years"},
-            {"name": "years", "type": "years", "label": "年份(逗号分隔)",
-             "default": "2022,2023,2024"},
-        ],
     },
 ]
 
@@ -172,6 +184,46 @@ def _run(key: str, params: dict) -> None:
 
 
 # --- Per-source runners -----------------------------------------------------
+def _run_cma(params: dict, emit) -> dict:
+    from crawler.sources import cma
+    from crawler import load, embed as embed_mod
+
+    emit("获取 CMA 中央气象台台风列表 …")
+    storms = cma.fetch_storms(emit=emit)
+    emit(f"解析到 {len(storms)} 个台风的实况路径，写入数据库 …")
+    nty, npt = load.load_agency_storms(storms, agency="CMA", authoritative=True)
+    emit(f"已写入 {nty} 个台风 / {npt} 个实况点，生成语义向量 …")
+    a, _ = embed_mod.backfill()
+    emit(f"向量化完成：新增 {a}")
+    return {"台风": nty, "实况点": npt, "新增向量": a}
+
+
+def _run_jma(params: dict, emit) -> dict:
+    from crawler.sources import jma
+    from crawler import load, embed as embed_mod
+
+    emit("获取 JMA 当前活跃台风 …")
+    storms = jma.fetch_storms(emit=emit)
+    emit(f"解析到 {len(storms)} 个台风的 JMA 实况点，写入 …")
+    nty, npt = load.load_agency_storms(storms, agency="JMA", authoritative=False)
+    a, _ = embed_mod.backfill()
+    emit(f"完成：{nty} 台风 / {npt} 实况点")
+    return {"台风": nty, "实况点": npt}
+
+
+def _run_jtwc(params: dict, emit) -> dict:
+    from crawler.sources import jtwc
+    from crawler import load, embed as embed_mod
+
+    emit("获取 JTWC 实时警报 …")
+    storms = jtwc.fetch_storms(emit=emit)
+    emit(f"解析到 {len(storms)} 个台风的 JTWC 定位，写入 …")
+    nty, npt = load.load_agency_storms(storms, agency="JTWC", authoritative=False)
+    a, _ = embed_mod.backfill()
+    emit(f"完成：{nty} 台风 / {npt} 实况点")
+    return {"台风": nty, "实况点": npt}
+
+
 def _run_ibtracs(params: dict, emit) -> dict:
     from crawler.sources import ibtracs
     from crawler import load, embed as embed_mod
@@ -239,18 +291,22 @@ def _run_digital_typhoon(params: dict, emit) -> dict:
 
 
 def _run_full(params: dict, emit) -> dict:
-    emit("========== 1/3 IBTrACS ==========")
-    c1 = _run_ibtracs(params, emit)
-    emit("========== 2/3 GDACS ==========")
-    c2 = _run_gdacs(params, emit)
-    emit("========== 3/3 Digital Typhoon ==========")
-    c3 = _run_digital_typhoon(params, emit)
-    return {**c1, **c2, **c3}
+    emit("========== 1/3 CMA 实况 ==========")
+    c1 = _run_cma(params, emit)
+    emit("========== 2/3 JMA 实况 ==========")
+    c2 = _run_jma(params, emit)
+    emit("========== 3/3 JTWC 实况 ==========")
+    c3 = _run_jtwc(params, emit)
+    return {"台风": c1.get("台风"), "CMA实况点": c1.get("实况点"),
+            "JMA实况点": c2.get("实况点"), "JTWC实况点": c3.get("实况点")}
 
 
 RUNNERS = {
-    "ibtracs": _run_ibtracs,
+    "cma": _run_cma,
+    "jma": _run_jma,
+    "jtwc": _run_jtwc,
+    "full": _run_full,
     "gdacs": _run_gdacs,
     "digital_typhoon": _run_digital_typhoon,
-    "full": _run_full,
+    "ibtracs": _run_ibtracs,
 }

@@ -87,6 +87,9 @@ class TrackPoint(Base):
     typhoon_id: Mapped[int] = mapped_column(
         ForeignKey("typhoon.id", ondelete="CASCADE"), index=True
     )
+    # Which official agency observed this point (CMA / JMA / JTWC / IBTrACS).
+    # Lets multiple agencies' actual (实况) tracks coexist for one typhoon.
+    agency: Mapped[str | None] = mapped_column(String(16), index=True)
     obs_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     geom: Mapped[object] = mapped_column(Geometry("POINT", srid=SRID, spatial_index=False))
     lat: Mapped[float] = mapped_column(Float)

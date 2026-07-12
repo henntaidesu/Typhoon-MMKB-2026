@@ -151,3 +151,79 @@ def load_media_and_damage(intl_id: str, dt_result) -> None:
 
 # func imported lazily to keep top clean
 from sqlalchemy import func  # noqa: E402
+
+
+# --- Multi-agency actual-track loading (实况路径) -----------------------------
+def _rebuild_region_from_points(session: Session, obj: Typhoon) -> None:
+    """Coarse impact corridor derived from ALL observed points of the typhoon
+    (any agency), ordered by time. Buffer ~1 degree (~100 km)."""
+    obj.regions.clear()
+    session.flush()
+    pts = sorted(obj.track_points, key=lambda t: t.obs_time)
+    coords = [(t.lon, t.lat) for t in pts]
+    if len(coords) < 2:
+        return
+    poly = LineString(coords).buffer(1.0)
+    mp = poly if isinstance(poly, MultiPolygon) else MultiPolygon([poly])
+    obj.regions.append(AffectedRegion(
+        region_name=f"{obj.name or obj.intl_id} corridor",
+        geom=f"SRID={SRID};{mp.wkt}", impact_type="wind_corridor", source="derived",
+    ))
+
+
+def _apply_meta(obj: Typhoon, st, agency: str, authoritative: bool) -> None:
+    """Fill typhoon core fields. Authoritative source (CMA) overwrites; others
+    only fill values that are still missing, so they enrich without clobbering."""
+    winds = [p.wind_kt for p in st.points if p.wind_kt is not None]
+    press = [p.pressure_hpa for p in st.points if p.pressure_hpa is not None]
+    times = [p.obs_time for p in st.points]
+    maxw = max(winds) if winds else None
+    minp = min(press) if press else None
+
+    def put(attr, value):
+        if value is None:
+            return
+        if authoritative or getattr(obj, attr) is None:
+            setattr(obj, attr, value)
+
+    put("name", st.name)
+    put("season_year", st.season_year)
+    put("category", st.category)
+    put("max_wind_kt", maxw)
+    put("min_pressure_hpa", minp)
+    put("start_time", min(times) if times else None)
+    put("end_time", max(times) if times else None)
+    if authoritative or obj.source is None:
+        obj.source = agency
+
+
+def load_agency_storms(storms, agency: str, authoritative: bool = False) -> tuple[int, int]:
+    """Upsert actual (实况) tracks from one agency. Only that agency's points are
+    replaced, so multiple agencies' tracks coexist on the same typhoon.
+    Returns (typhoons_touched, points_written)."""
+    n_ty = n_pt = 0
+    with SessionLocal() as session:
+        for st in storms:
+            obj = session.scalar(select(Typhoon).where(Typhoon.intl_id == st.intl_id))
+            if obj is None:
+                obj = Typhoon(intl_id=st.intl_id)
+                session.add(obj)
+            _apply_meta(obj, st, agency, authoritative)
+            session.flush()
+
+            # Replace only this agency's existing points (idempotent re-ingest).
+            for tp in [t for t in obj.track_points if t.agency == agency]:
+                obj.track_points.remove(tp)
+            session.flush()
+            for p in st.points:
+                obj.track_points.append(TrackPoint(
+                    agency=agency, obs_time=p.obs_time, geom=_wkt_point(p.lon, p.lat),
+                    lat=p.lat, lon=p.lon, wind_kt=p.wind_kt, pressure_hpa=p.pressure_hpa,
+                    grade=p.grade, move_dir=p.move_dir, move_speed=p.move_speed,
+                ))
+                n_pt += 1
+            session.flush()
+            _rebuild_region_from_points(session, obj)
+            n_ty += 1
+        session.commit()
+    return n_ty, n_pt
