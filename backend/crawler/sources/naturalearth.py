@@ -75,9 +75,10 @@ class AdminRec:
     name_local: str | None
     iso_a2: str | None
     iso_a3: str | None
-    admin_level: int  # 0 country, 1 province
-    country: str | None  # parent country name (for admin-1 grouping)
+    admin_level: int  # 0 country, 1 province, 2 prefecture/city
+    country: str | None  # parent country name (for grouping)
     wkt: str
+    parent_name: str | None = None  # parent admin-1 name (for admin-2 regions)
 
 
 def download(url: str, force: bool = False) -> str:
@@ -125,15 +126,25 @@ def _to_multipolygon_wkt(geom_json: dict) -> str | None:
     return g.wkt
 
 
+def _match_wp_iso2(*candidates) -> str | None:
+    """Return the WP ISO-A2 code among candidates (handles disputed territories
+    whose primary ISO_A2 is hyphenated, e.g. Taiwan's 'CN-TW' vs ISO_A2_EH 'TW')."""
+    for c in candidates:
+        code = str(c or "").upper()
+        if code in WP_ISO2:
+            return code
+    return None
+
+
 def _parse_admin0(path: str) -> list[AdminRec]:
     with open(path, encoding="utf-8") as f:
         data = json.load(f)
     out: list[AdminRec] = []
     for feat in data.get("features", []):
         p = feat.get("properties", {}) or {}
-        iso2 = _prop(p, "ISO_A2", "ISO_A2_EH", "iso_a2")
-        iso3 = _prop(p, "ISO_A3", "ISO_A3_EH", "adm0_a3", "ADM0_A3")
-        if str(iso2 or "").upper() not in WP_ISO2:
+        iso2 = _match_wp_iso2(p.get("ISO_A2_EH"), p.get("ISO_A2"), p.get("iso_a2"))
+        iso3 = _prop(p, "ISO_A3_EH", "ISO_A3", "adm0_a3", "ADM0_A3")
+        if iso2 is None:
             continue
         wkt = _to_multipolygon_wkt(feat.get("geometry") or {})
         if not wkt:
@@ -155,10 +166,9 @@ def _parse_admin1(path: str) -> list[AdminRec]:
     out: list[AdminRec] = []
     for feat in data.get("features", []):
         p = feat.get("properties", {}) or {}
-        iso2 = _prop(p, "iso_a2", "ISO_A2")
         # admin-1 files store the parent country ISO in various keys.
-        parent_iso2 = str(iso2 or "").upper()
-        if parent_iso2 not in WP_ISO2:
+        parent_iso2 = _match_wp_iso2(p.get("iso_a2"), p.get("iso_a2_eh"), p.get("ISO_A2"))
+        if parent_iso2 is None:
             continue
         wkt = _to_multipolygon_wkt(feat.get("geometry") or {})
         if not wkt:

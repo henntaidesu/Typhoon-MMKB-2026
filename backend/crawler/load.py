@@ -402,6 +402,7 @@ def load_admin_regions(records) -> int:
             obj.iso_a3 = r.iso_a3
             obj.admin_level = r.admin_level
             obj.country = r.country
+            obj.parent_name = getattr(r, "parent_name", None)
             obj.geom = f"SRID={SRID};{r.wkt}"
             n += 1
         session.commit()

@@ -11,6 +11,10 @@ erDiagram
   TYPHOON ||--o{ AFFECTED_REGION : has
   TYPHOON ||--o{ SECONDARY_DISASTER : triggers
   TYPHOON ||--o{ MEDIA_ASSET : has
+  TYPHOON ||--o{ TYPHOON_REGION_IMPACT : affects
+  TYPHOON ||--o{ LANDFALL : makes
+  ADMIN_REGION ||--o{ TYPHOON_REGION_IMPACT : "impacted by"
+  ADMIN_REGION ||--o{ LANDFALL : "struck by"
 
   TYPHOON {
     int id PK
@@ -51,6 +55,7 @@ erDiagram
     int casualties
     float economic_loss_usd
     text description
+    string region_name "受影响国家/省(源上报)"
     vector embedding "384维"
   }
   MEDIA_ASSET {
@@ -60,7 +65,54 @@ erDiagram
     text url
     text caption
   }
+  ADMIN_REGION {
+    int id PK
+    string ne_id "Natural Earth 主键"
+    string name
+    string iso_a2
+    string iso_a3
+    int admin_level "0国家/1省县"
+    string country "父国(admin-1分组)"
+    geometry geom "MULTIPOLYGON/4326"
+  }
+  TYPHOON_REGION_IMPACT {
+    int id PK
+    int typhoon_id FK
+    int admin_region_id FK
+    bool passed_over "轨迹穿过"
+    bool landfall "区域内有登陆"
+    bool within_corridor "在影响走廊内"
+    float min_distance_deg
+    float max_wind_kt
+    datetime landfall_time
+  }
+  LANDFALL {
+    int id PK
+    int typhoon_id FK
+    int admin_region_id FK "最细区域(省优先)"
+    string country "反规范化"
+    datetime landfall_time
+    float lat
+    float lon
+    float wind_kt
+    geometry geom "POINT/4326"
+  }
 ```
+
+## 地理影响层 (Geographic Impact — 新增)
+
+`ADMIN_REGION` 是从 **Natural Earth (public domain)** 加载的参考行政边界
+（国家 admin-0 + 省/县 admin-1，仅西太平洋沿岸国家），由
+`backend/crawler/sources/naturalearth.py` + `load.load_admin_regions` 一次性入库。
+
+`backend/crawler/enrich.py` 把每个台风的**主机构轨迹**（CMA→JMA→JTWC 优先，避免多机构
+重复计数）与 `ADMIN_REGION` 做 PostGIS 空间连接，派生两张事实表：
+- `TYPHOON_REGION_IMPACT`：台风影响了哪些国家/省（穿过 / 走廊内 / 登陆 + 距离 + 近区峰值风速）。
+- `LANDFALL`：由海入陆的离散登陆事件（`ST_Contains` 逐点判国 → outside→inside 跳变），
+  登陆点吸附到海岸线，归属到最细行政区（省优先）。
+
+这两张表回答「某台风影响了哪些国家」与「某区域被台风登陆了多少次」，
+是 `/stats/*` 与 `/typhoons/{id}/countries`、`/landfalls` 的数据来源。
 
 ## 元数据 / 语义计算设计 (Metadata for Semantic Computing)
 

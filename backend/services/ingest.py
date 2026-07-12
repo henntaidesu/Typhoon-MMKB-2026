@@ -73,6 +73,14 @@ SOURCES = [
         "params": [],
     },
     {
+        "key": "gadm",
+        "name": "GADM 地级市边界",
+        "provider": "GADM 4.1 (学术用途)",
+        "kind": "基础地理边界",
+        "depends": "naturalearth",
+        "params": [],
+    },
+    {
         "key": "geo_impact",
         "name": "地理影响分析",
         "provider": "派生：轨迹 × 行政边界",
@@ -418,6 +426,20 @@ def _run_naturalearth(params: dict, emit) -> dict:
     return {"国家": n0, "省/县": n1, "库内区域": load.admin_region_count()}
 
 
+def _run_gadm(params: dict, emit) -> dict:
+    """Load GADM level-2 (prefecture / 地级市) boundaries for the WP landfall
+    countries into admin_region (admin_level=2). Idempotent by ne_id."""
+    from crawler.sources import gadm
+    from crawler import load
+
+    emit("下载并解析 GADM 地级市边界（中国 地级市 + 周边国家）…")
+    recs = gadm.parse()
+    emit(f"解析到 {len(recs)} 个地级市/二级行政区，写入数据库 …")
+    n = load.load_admin_regions(recs)
+    emit(f"完成：写入 {n} 个二级行政区；库内区域共 {load.admin_region_count()}。")
+    return {"地级市/二级区": n, "库内区域": load.admin_region_count()}
+
+
 def _run_geo_impact(params: dict, emit) -> dict:
     """Derive per-typhoon affected regions + landfall events by spatially joining
     tracks against the admin_region boundaries. Incremental (skips already-done)."""
@@ -473,6 +495,7 @@ RUNNERS = {
     "jtwc": _run_jtwc,
     "gdacs": _run_gdacs,
     "naturalearth": _run_naturalearth,
+    "gadm": _run_gadm,
     "geo_impact": _run_geo_impact,
     "digital_typhoon": _run_digital_typhoon,
     "ibtracs": _run_ibtracs,

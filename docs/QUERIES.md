@@ -34,11 +34,30 @@ ORM: 子查询取时空候选 `typhoon_id`，外层 `where(Typhoon.id.in_(...))`
 
 ## 5. 统计聚合 (Aggregation, 前端图表)
 ```
-GET /search/stats   ->  { typhoons_by_year, disasters_by_type, totals }
+GET /search/stats   ->  { typhoons_by_year, disasters_by_type, top_countries, total_typhoons, total_disasters, total_landfalls }
 ```
+
+## 6. 地理影响查询 (Geographic Impact — 新增)
+时空间计算的直接应用：把轨迹归属到真实行政边界，回答「影响了哪些国家」「某区域被登陆多少次」。
+
+```
+GET /stats/by-country
+  -> [{iso_a3, country, typhoon_count, landfall_count}]   # 各国受影响台风数 + 登陆次数
+GET /stats/by-region?level=1&country=CN&min_year=&max_year=
+  -> [{admin_region_id, name, country, landfall_count, impact_count}]  # 某省被登陆多少次
+GET /typhoons/{id}/countries
+  -> [{name, iso_a3, admin_level, passed_over, landfall, within_corridor, min_distance_deg, max_wind_kt, landfall_time}]
+```
+数据来自 `typhoon_region_impact` / `landfall`（`backend/crawler/enrich.py` 用
+`ST_Contains` / `ST_Intersects` / `ST_Distance` 派生）。示例真实结果：
+登陆次数 China 600 > Philippines 527 > Japan 284 > Vietnam 250 > Taiwan 106；
+中国省份 广东 217 > 海南 121 > 福建 111。
 
 ---
 ### GeoJSON 输出（供 Leaflet 直接渲染）
 - `GET /typhoons/{id}/track` → Feature(LineString)，属性含逐点风速/气压/时间
 - `GET /typhoons/{id}/disasters` → FeatureCollection(Point)
 - `GET /typhoons/{id}/affected-regions` → FeatureCollection(Polygon, `ST_AsGeoJSON`)
+- `GET /typhoons/{id}/landfalls` → FeatureCollection(Point)，登陆点(时间/风速/等级)
+- `GET /stats/landfall-geojson?level=0|1&bbox=` → FeatureCollection(Polygon)，
+  每个行政区带 `landfall_count`/`impact_count`，直接驱动前端「统计」页的分级(choropleth)地图

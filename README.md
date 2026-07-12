@@ -47,6 +47,9 @@ cd frontend && npm install && npm run dev              # http://localhost:5173
 2. **时空间查询** `GET /search/spatiotemporal?bbox=120,20,135,30&date_from=2023-07-01&date_to=2023-09-30`
 3. **语义联想查询** `POST /search/semantic {"q":"造成严重洪水的强台风","k":10}`
 4. **时空×语义 结合查询** `GET /search/hybrid?q=storm surge damage&bbox=120,20,135,30`
+5. **地理影响查询** `GET /stats/by-country`、`GET /stats/by-region?level=1&country=CN`、
+   `GET /typhoons/{id}/countries`——把轨迹归属到真实行政边界(Natural Earth)，回答
+   「影响了哪些国家」「某区域被台风登陆多少次」。前端「统计」页含登陆频次分级地图。
 
 ## 验证
 

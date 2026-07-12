@@ -39,6 +39,7 @@ export default {
   statsByCountry: () => get('/stats/by-country'),
   statsByRegion: (params) => get('/stats/by-region', params),
   landfallGeojson: (params) => get('/stats/landfall-geojson', params),
+  regionTracks: (id, params) => get(`/stats/region/${id}/tracks`, params),
   typhoonCountries: (id) => get(`/typhoons/${id}/countries`),
   typhoonLandfalls: (id) => get(`/typhoons/${id}/landfalls`),
   // Data sources (数据源 page)

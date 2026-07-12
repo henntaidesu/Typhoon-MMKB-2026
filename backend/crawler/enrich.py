@@ -97,6 +97,7 @@ def compute_impacts_for(session: Session, typhoon: Typhoon) -> int:
     cand_meta = {c.id: c for c in cand}
     cand0_ids = [c.id for c in cand if c.admin_level == 0]
     cand1_ids = [c.id for c in cand if c.admin_level == 1]
+    cand2_ids = [c.id for c in cand if c.admin_level == 2]
 
     # --- Pass 1: line-based passed_over + min distance, per candidate region.
     line = func.ST_GeomFromEWKT(line_wkt)
@@ -151,7 +152,7 @@ def compute_impacts_for(session: Session, typhoon: Typhoon) -> int:
             # outside→inside transition = a landfall in `country_id`.
             if country_id is not None and country_id != prev_country and prev_country is None:
                 n_landfalls += _record_landfall(
-                    session, typhoon, row, country_id, cand1_ids, cand_meta, impacts)
+                    session, typhoon, row, country_id, cand1_ids, cand2_ids, cand_meta, impacts)
             prev_country = country_id
 
     # --- Persist impacts (only regions the storm actually affected).
@@ -169,9 +170,10 @@ def compute_impacts_for(session: Session, typhoon: Typhoon) -> int:
     return n_landfalls
 
 
-def _record_landfall(session, typhoon, row, country_id, cand1_ids, cand_meta, impacts) -> int:
+def _record_landfall(session, typhoon, row, country_id, cand1_ids, cand2_ids, cand_meta, impacts) -> int:
     """Insert one Landfall for the crossing at track fix `row` into `country_id`;
-    resolve the most-specific admin-1 province and snap the point to the coast."""
+    resolve the most-specific region (admin-2 city > admin-1 province > country)
+    and snap the point to the coast."""
     obs_time, lon, lat, wind, pres, grade, _ = row
     b_pt = func.ST_GeomFromEWKT(f"SRID={SRID};POINT({lon} {lat})")
 
@@ -183,7 +185,8 @@ def _record_landfall(session, typhoon, row, country_id, cand1_ids, cand_meta, im
     ).first()
     lf_lon, lf_lat = (snapped[0], snapped[1]) if snapped and snapped[0] is not None else (lon, lat)
 
-    # Most-specific region: an admin-1 province containing the fix, else the country.
+    # Most-specific region: prefer admin-2 (prefecture/city), then admin-1
+    # province, else the country.
     region_id = country_id
     if cand1_ids:
         a1 = session.scalar(
@@ -194,6 +197,15 @@ def _record_landfall(session, typhoon, row, country_id, cand1_ids, cand_meta, im
         )
         if a1 is not None:
             region_id = a1
+    if cand2_ids:
+        a2 = session.scalar(
+            select(AdminRegion.id)
+            .where(AdminRegion.admin_level == 2, AdminRegion.id.in_(cand2_ids),
+                   func.ST_Contains(AdminRegion.geom, b_pt))
+            .limit(1)
+        )
+        if a2 is not None:
+            region_id = a2
 
     meta = cand_meta.get(region_id)
     country_meta = cand_meta.get(country_id)

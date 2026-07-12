@@ -217,8 +217,9 @@ class AdminRegion(Base):
     name_local: Mapped[str | None] = mapped_column(String(128))
     iso_a2: Mapped[str | None] = mapped_column(String(2), index=True)
     iso_a3: Mapped[str | None] = mapped_column(String(3), index=True)
-    admin_level: Mapped[int | None] = mapped_column(Integer, index=True)  # 0 country, 1 province
-    country: Mapped[str | None] = mapped_column(String(128), index=True)  # parent country (for admin-1 grouping)
+    admin_level: Mapped[int | None] = mapped_column(Integer, index=True)  # 0 country, 1 province, 2 prefecture/city
+    country: Mapped[str | None] = mapped_column(String(128), index=True)  # parent country (for grouping)
+    parent_name: Mapped[str | None] = mapped_column(String(128), index=True)  # parent admin-1 name (for admin-2 grouping)
     geom: Mapped[object] = mapped_column(Geometry("MULTIPOLYGON", srid=SRID, spatial_index=False))
 
     __table_args__ = (
