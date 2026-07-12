@@ -96,8 +96,10 @@ def extract_loss_usd(text: str) -> float | None:
 # Maps the canonical SecondaryDisaster.disaster_type values used across the KB.
 _TYPE_KEYWORDS: list[tuple[str, tuple[str, ...]]] = [
     ("storm_surge",  ("风暴潮", "storm surge", "高潮", "surge")),
-    ("flood",        ("洪涝", "洪水", "内涝", "flood", "inundation", "洪水", "浸水", "大雨", "暴雨", "heavy rain")),
-    ("landslide",    ("滑坡", "泥石流", "地质灾害", "山体", "landslide", "mudslide", "debris flow", "土砂", "崖崩")),
+    ("flood",        ("洪涝", "洪水", "山洪", "内涝", "flood", "inundation", "浸水", "大雨",
+                      "暴雨", "heavy rain", "rainstorm", "torrential")),
+    ("landslide",    ("滑坡", "泥石流", "地质灾害", "山体", "landslide", "landslip",
+                      "mudslide", "debris flow", "土砂", "崖崩")),
     ("infrastructure", ("停电", "断电", "倒塌", "基础设施", "power outage", "infrastructure", "停電", "倒壊")),
     ("casualty",     ("死亡", "遇难", "伤亡", "casualt", "死者", "行方不明", "被災")),
     ("wind_impact",  ("大风", "狂风", "强风", "wind", "暴风")),

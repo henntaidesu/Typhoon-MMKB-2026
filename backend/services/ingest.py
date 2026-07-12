@@ -36,38 +36,22 @@ SOURCES = [
         "name": "中央气象台 · 实况路径",
         "provider": "CMA 中国气象局 (typhoon.nmc.cn)",
         "kind": "台风实况路径",
-        "description": "官方实况路径：每个台风实际观测走过的逐点轨迹。留空=抓取本季"
-                       "（含活跃台风，实时更新）；填年份可批量收集历史数据。",
-        "params": [
-            {"name": "years", "type": "years",
-             "label": "年份(逗号分隔/范围如2015-2024,留空=本季实况)", "default": ""},
-        ],
+        "params": [],
     },
     {
         "key": "jma",
-        "name": "日本气象厅 · 实况",
+        "name": "日本气象厅 · 最佳路径",
         "provider": "JMA / RSMC 东京",
-        "kind": "台风实况",
-        "description": "西北太平洋 WMO 指定官方机构 (RSMC)。抓取当前活跃台风的"
-                       "「実況 / Analysis」定位作为 JMA 官方实况点。",
+        "kind": "台风路径(官方)",
+        "depends": "cma",
         "params": [],
     },
     {
         "key": "jtwc",
-        "name": "JTWC · 实况",
+        "name": "JTWC · 最佳路径",
         "provider": "JTWC 美国联合台风警报中心",
-        "kind": "台风实况",
-        "description": "读取 JTWC 实时警报，解析当前西太平洋活跃台风的最新定位。"
-                       "尽力解析：无活跃台风或警报已撤时可能无数据（属正常）。",
-        "params": [],
-    },
-    {
-        "key": "full",
-        "name": "全部官方实况源",
-        "provider": "CMA + JMA + JTWC",
-        "kind": "一键实况",
-        "description": "依次执行三家官方机构的实况路径抓取并生成语义向量，"
-                       "同一台风按编号自动合并各家的实况点。",
+        "kind": "台风路径(官方)",
+        "depends": "cma",
         "params": [],
     },
     {
@@ -75,8 +59,6 @@ SOURCES = [
         "name": "GDACS 灾害事件",
         "provider": "GDACS",
         "kind": "次生灾害",
-        "description": "全球灾害预警系统的热带气旋事件，按名称+年份匹配到已入库的"
-                       "台风，生成次生灾害记录（风暴潮 / 风灾等）。",
         "depends": "cma",
         "params": [
             {"name": "years", "type": "years", "label": "年份(逗号分隔)",
@@ -88,23 +70,22 @@ SOURCES = [
         "name": "Digital Typhoon",
         "provider": "NII 情報学研究所",
         "kind": "卫星影像 / 灾情",
-        "description": "为库内每个台风抓取代表性卫星云图与灾情/伤亡文本"
-                       "（日文页面，尽力解析，缺失自动跳过）。",
         "depends": "cma",
         "params": [],
     },
 ]
 
-_KEYS = {s["key"] for s in SOURCES}
+# "update" is a runnable action (refresh active typhoons) but not a source card.
+_KEYS = {s["key"] for s in SOURCES} | {"update"}
 
 
 # --- Job registry -----------------------------------------------------------
 _lock = threading.Lock()
 _active: str | None = None
 _state: dict[str, dict] = {
-    s["key"]: {"status": "idle", "message": "", "log": [],
-               "counts": {}, "started_at": None, "finished_at": None}
-    for s in SOURCES
+    key: {"status": "idle", "message": "", "log": [],
+          "counts": {}, "started_at": None, "finished_at": None}
+    for key in _KEYS
 }
 
 
@@ -188,44 +169,156 @@ def _run(key: str, params: dict) -> None:
 
 # --- Per-source runners -----------------------------------------------------
 def _run_cma(params: dict, emit) -> dict:
+    """Full incremental CMA crawl in one run. Fetches EVERY typhoon in scope
+    (years param, or all history 1949→now when empty) that is not already in the
+    DB, plus refreshes active/just-ended storms. Already-fetched ended storms are
+    skipped, so re-running stays cheap (only active ones re-download)."""
+    from datetime import datetime, timezone
+
     from crawler.sources import cma
     from crawler import load, embed as embed_mod
 
     years = params.get("years") or None
-    emit(f"获取 CMA 中央气象台台风列表（{years or '本季实况'}）…")
-    storms = cma.fetch_storms(years=years, emit=emit)
-    emit(f"解析到 {len(storms)} 个台风的实况路径，写入数据库 …")
-    nty, npt = load.load_agency_storms(storms, agency="CMA", authoritative=True)
-    emit(f"已写入 {nty} 个台风 / {npt} 个实况点，生成语义向量 …")
+    cur_year = datetime.now(timezone.utc).year
+    if years:
+        scope = sorted({int(y) for y in years}, reverse=True)
+    else:
+        scope = list(range(cur_year, cma.EARLIEST_YEAR - 1, -1))  # all history, newest first
+
+    status_map = load.cma_status_map()  # already-fetched CMA typhoons -> is_active
+    to_fetch: list[dict] = []
+    refresh = 0
+    seen: set[str] = set()
+
+    emit(f"规划抓取范围：{scope[0]}…{scope[-1]}" if len(scope) > 1 else f"抓取 {scope[0]}")
+    for y in scope:
+        roster = cma.fetch_current_roster(emit) if y == cur_year else cma.fetch_year_roster(y, emit)
+        for entry in roster:
+            iid = entry["intl_id"]
+            if iid in seen:
+                continue
+            seen.add(iid)
+            st = status_map.get(iid, "absent")
+            if entry["active"] or st is True:
+                to_fetch.append(entry)      # active / just-ended -> always refresh
+                refresh += 1
+            elif st is False:
+                continue                    # ended and already fetched -> skip
+            else:
+                to_fetch.append(entry)      # new storm (no per-run cap)
+
+    if not to_fetch:
+        emit("没有需要抓取的台风（已全部抓取完毕）。")
+        return {"本次处理": 0, "库内CMA台风": len(status_map)}
+
+    emit(f"本次将处理 {len(to_fetch)} 个台风（含刷新 {refresh}，新增 {len(to_fetch) - refresh}），逐个拉取实况 …")
+    loaded = 0
+    for i, entry in enumerate(to_fetch, 1):
+        emit(f"  ({i}/{len(to_fetch)}) {entry['intl_id']} {entry['name'] or ''} …")
+        try:
+            storm = cma.fetch_view(entry)
+            if storm is None:
+                continue
+            load.load_agency_storms([storm], agency="CMA", authoritative=True)
+        except Exception as e:  # noqa: BLE001 — one bad storm must not abort the run
+            emit(f"    跳过 {entry['intl_id']}（{e}）")
+            continue
+        loaded += 1
+
+    emit("生成语义向量 …")
     a, _ = embed_mod.backfill()
-    emit(f"向量化完成：新增 {a}")
-    return {"台风": nty, "实况点": npt, "新增向量": a}
+
+    total = len(load.cma_status_map())
+    emit(f"本次处理 {loaded} 个（刷新 {refresh}，新增历史 {loaded - refresh}）；库内共 {total} 个 CMA 台风。已全部抓取完毕。")
+    return {"本次处理": loaded, "刷新": refresh, "新增历史": loaded - refresh, "库内CMA台风": total}
 
 
 def _run_jma(params: dict, emit) -> dict:
-    from crawler.sources import jma
+    """JMA official best-track (historical, keyed by WMO number → merges onto the
+    same typhoon as CMA) plus the current active storm's realtime 実況 point.
+    Incremental: ended storms already carrying JMA points are skipped."""
+    from datetime import datetime, timezone
+
+    from crawler.sources import jma, jma_besttrack
     from crawler import load, embed as embed_mod
 
-    emit("获取 JMA 当前活跃台风 …")
-    storms = jma.fetch_storms(emit=emit)
-    emit(f"解析到 {len(storms)} 个台风的 JMA 实况点，写入 …")
-    nty, npt = load.load_agency_storms(storms, agency="JMA", authoritative=False)
-    a, _ = embed_mod.backfill()
-    emit(f"完成：{nty} 台风 / {npt} 实况点")
-    return {"台风": nty, "实况点": npt}
+    years = params.get("years") or None
+    cur_year = datetime.now(timezone.utc).year
+
+    bt = jma_besttrack.fetch_storms(years=years, emit=emit)
+    status = load.agency_status_map("JMA")
+    to_load = [s for s in bt if status.get(s.intl_id) is not False]  # skip fetched+ended
+    emit(f"JMA 最佳路径：共 {len(bt)}，需写入 {len(to_load)} …")
+    nty = npt = 0
+    for i in range(0, len(to_load), 100):
+        chunk = to_load[i:i + 100]
+        a, b = load.load_agency_storms(chunk, agency="JMA", authoritative=False)
+        nty += a; npt += b
+        emit(f"  已写入 {min(i + 100, len(to_load))}/{len(to_load)} …")
+
+    if not years or cur_year in {int(y) for y in years}:
+        emit("获取 JMA 当前活跃台风实况 …")
+        rt = jma.fetch_storms(emit=emit)
+        if rt:
+            load.load_agency_storms(rt, agency="JMA", authoritative=False)
+
+    emit("生成语义向量 …")
+    embed_mod.backfill()
+    total = len(load.agency_status_map("JMA"))
+    emit(f"JMA 完成：写入 {nty} 台风 / {npt} 点；库内 JMA 台风 {total}。")
+    return {"JMA台风": nty, "JMA点": npt, "库内JMA": total}
 
 
 def _run_jtwc(params: dict, emit) -> dict:
-    from crawler.sources import jtwc
+    """JTWC official best-track (historical) matched to known typhoons by name,
+    plus the current active storm's realtime fix. Years already carrying JTWC
+    points are skipped (except the current year)."""
+    from datetime import datetime, timezone
+
+    from crawler.sources import jtwc, jtwc_besttrack
     from crawler import load, embed as embed_mod
 
-    emit("获取 JTWC 实时警报 …")
-    storms = jtwc.fetch_storms(emit=emit)
-    emit(f"解析到 {len(storms)} 个台风的 JTWC 定位，写入 …")
-    nty, npt = load.load_agency_storms(storms, agency="JTWC", authoritative=False)
-    a, _ = embed_mod.backfill()
-    emit(f"完成：{nty} 台风 / {npt} 实况点")
-    return {"台风": nty, "实况点": npt}
+    years = params.get("years")
+    cur_year = datetime.now(timezone.utc).year
+    if years:
+        scope = sorted({int(y) for y in years})
+    else:
+        scope = list(range(jtwc_besttrack.EARLIEST_YEAR, cur_year + 1))
+
+    done_seasons = load.agency_seasons("JTWC")
+    nty = npt = unresolved = 0
+    for y in scope:
+        if y in done_seasons and y != cur_year:
+            continue  # this season's JTWC tracks already loaded
+        storms = jtwc_besttrack.fetch_storms([y], emit=emit)
+        batch = []
+        for s in storms:
+            # Prefer a name match; fall back to JTWC's number-based key (already
+            # set as s.intl_id) when the storm has one and it exists in the KB.
+            iid = load.resolve_intl_id(s.name, s.season_year)
+            if not iid and s.intl_id and load.typhoon_exists(s.intl_id):
+                iid = s.intl_id
+            if not iid:
+                unresolved += 1
+                continue
+            s.intl_id = iid
+            batch.append(s)
+        if batch:
+            a, b = load.load_agency_storms(batch, agency="JTWC", authoritative=False)
+            nty += a; npt += b
+        emit(f"  JTWC {y}: 写入 {len(batch)} 个轨迹")
+
+    if not years or cur_year in scope:
+        emit("获取 JTWC 当前活跃台风定位 …")
+        rt = jtwc.fetch_storms(emit=emit)
+        if rt:
+            load.load_agency_storms(rt, agency="JTWC", authoritative=False)
+
+    emit("生成语义向量 …")
+    embed_mod.backfill()
+    total = len(load.agency_status_map("JTWC"))
+    emit(f"JTWC 完成：写入 {nty} / 点 {npt}；未匹配(名称对不上) {unresolved}；库内 JTWC {total}。")
+    return {"JTWC台风": nty, "JTWC点": npt, "未匹配": unresolved, "库内JTWC": total}
 
 
 def _run_ibtracs(params: dict, emit) -> dict:
@@ -294,23 +387,47 @@ def _run_digital_typhoon(params: dict, emit) -> dict:
     return {"处理": done, "新增向量": nd}
 
 
-def _run_full(params: dict, emit) -> dict:
-    emit("========== 1/3 CMA 实况 ==========")
-    c1 = _run_cma(params, emit)
-    emit("========== 2/3 JMA 实况 ==========")
-    c2 = _run_jma(params, emit)
-    emit("========== 3/3 JTWC 实况 ==========")
-    c3 = _run_jtwc(params, emit)
-    return {"台风": c1.get("台风"), "CMA实况点": c1.get("实况点"),
-            "JMA实况点": c2.get("实况点"), "JTWC实况点": c3.get("实况点")}
+def _run_update(params: dict, emit) -> dict:
+    """Fast refresh of only the currently active (进行中) typhoons — re-pulls the
+    live CMA track for each active storm plus the current JMA/JTWC realtime fix.
+    Does NOT rescan history, so it returns in seconds."""
+    from crawler.sources import cma, jma, jtwc
+    from crawler import load, embed as embed_mod
+
+    emit("获取当前活跃台风 …")
+    active = [e for e in cma.fetch_current_roster(emit) if e["active"]]
+    if not active:
+        emit("当前没有进行中的台风，无需更新。")
+        return {"进行中": 0}
+
+    n = 0
+    for e in active:
+        emit(f"  刷新 {e['intl_id']} {e['name'] or ''} …")
+        storm = cma.fetch_view(e)
+        if storm is not None:
+            load.load_agency_storms([storm], agency="CMA", authoritative=True)
+            n += 1
+
+    for name, mod, agency in (("JMA", jma, "JMA"), ("JTWC", jtwc, "JTWC")):
+        try:
+            rt = mod.fetch_storms(emit=emit)
+            if rt:
+                load.load_agency_storms(rt, agency=agency, authoritative=False)
+        except Exception as ex:  # noqa: BLE001
+            emit(f"  {name} 实时跳过（{ex}）")
+
+    emit("生成语义向量 …")
+    embed_mod.backfill()
+    emit(f"更新完成：刷新了 {n} 个进行中台风。")
+    return {"进行中刷新": n}
 
 
 RUNNERS = {
     "cma": _run_cma,
     "jma": _run_jma,
     "jtwc": _run_jtwc,
-    "full": _run_full,
     "gdacs": _run_gdacs,
     "digital_typhoon": _run_digital_typhoon,
     "ibtracs": _run_ibtracs,
+    "update": _run_update,
 }

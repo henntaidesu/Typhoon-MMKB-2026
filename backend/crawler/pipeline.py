@@ -24,7 +24,7 @@ sys.path.insert(0, _HERE)
 sys.path.insert(0, os.path.abspath(os.path.join(_HERE, "..")))
 
 from sources import ibtracs, gdacs, digital_typhoon  # noqa: E402
-from sources import reliefweb, nmc_alarm, mem, fdma  # noqa: E402
+from sources import reliefweb, nmc_alarm, mem, fdma, hko, jma_warning  # noqa: E402
 import load  # noqa: E402
 import embed as embed_mod  # noqa: E402
 
@@ -62,6 +62,12 @@ def _load_secondary(years: list[int]) -> None:
 
     # 2e. 消防庁 被害報 — exact intl_id match (台风第N号)
     run_src("消防庁", lambda: fdma.collect(emit=say))
+
+    # 2f. 香港天文台 警告 — current warnings, time/space-matched
+    run_src("香港天文台", lambda: hko.collect(emit=say))
+
+    # 2g. 気象庁 気象警報 — current 警報, time/space-matched by prefecture
+    run_src("気象庁警報", lambda: jma_warning.collect(emit=say))
 
 
 def run(years: list[int], source: str = "last3years",

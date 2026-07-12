@@ -1,29 +1,36 @@
 """CMA 中央气象台 (typhoon.nmc.cn) — official Chinese real-time typhoon feed.
 
-Provides the '实况路径' (actual observed track) for the current season, including
-typhoons that are still active. This is the richest official live-track source
-for the West Pacific (full multi-hour observed track per storm).
+Provides the '实况路径' (actual observed track), for the current season (live,
+via list_default) and for any archived year (list_{year}, back to 1949). This
+is the richest official live-track source for the West Pacific.
 
-Feed is JSONP; the list endpoint is GBK-encoded, the view endpoint UTF-8, so
-decoding is auto-detected. Position array layout (index -> meaning):
+The feed is JSONP; list endpoints are GBK-encoded, the view endpoint UTF-8, so
+decoding is auto-detected. Access is split into a cheap *roster* (one request
+per year -> which storms exist + status) and an expensive *view* (one request
+per storm -> its full track). This split lets the caller fetch rosters to plan
+an incremental/batched backfill and only pull views for the storms it wants.
+
+Position array layout (index -> meaning):
   0 pointId  1 timeStr  2 epochMs  3 grade  4 lon  5 lat
   6 pressure(hPa)  7 wind(m/s)  8 moveDir  9 moveSpeed(km/h)  10 windRadii  11 forecasts
 """
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import httpx
 
 from crawler.sources.common import (
-    AgencyStorm, ObsPoint, compass_to_deg, ms_to_kt, num, strongest_grade,
+    AgencyStorm, ObsPoint, compass_to_deg, ms_to_kt, num, season_of, strongest_grade,
 )
 
 LIST_URL = "http://typhoon.nmc.cn/weatherservice/typhoon/jsons/list_default"
 LIST_YEAR_URL = "http://typhoon.nmc.cn/weatherservice/typhoon/jsons/list_{year}"
 VIEW_URL = "http://typhoon.nmc.cn/weatherservice/typhoon/jsons/view_{id}"
+EARLIEST_YEAR = 1949  # CMA archive reaches back to 1949
 _H = {"User-Agent": "Mozilla/5.0", "Referer": "http://typhoon.nmc.cn/"}
+_EPOCH = datetime(1970, 1, 1, tzinfo=timezone.utc)
 
 
 def _get(url: str) -> str:
@@ -47,33 +54,74 @@ def _jsonp(text: str):
     return json.loads(text[min(starts):max(ends) + 1])
 
 
-def _parse_row(row, emit) -> AgencyStorm | None:
-    """One typhoonList row -> AgencyStorm (fetches its view for the track)."""
-    internal_id = row[0]
+# --- Roster (cheap: storm list + status, no track) --------------------------
+def _name_of(row) -> str | None:
     name_en = row[1] if len(row) > 1 else None
-    tfbh = str(row[3]) if len(row) > 3 and row[3] is not None else ""
-    # Real WMO 编号 is 4 digits YYNN with storm-number >= 1. Unnamed systems use
-    # an 8-digit placeholder (default list) or the "2000" sentinel (yearly list)
-    # — both are filtered out here.
-    if not tfbh.isdigit() or len(tfbh) != 4 or int(tfbh[2:]) < 1:
-        return None
-    season = 2000 + int(tfbh[:2])
+    return None if not name_en or str(name_en).lower() in ("nameless", "unnamed") \
+        else str(name_en).title()
 
-    emit(f"  {tfbh} {name_en} 拉取实况路径 …")
+
+def _parse_roster(rows, year: int | None = None) -> list[dict]:
+    """Rows -> roster entries. Storms with a real WMO 编号 (4-digit YYNN) key on
+    it. Pre-1963 storms carry the "1900" no-number sentinel; when a query year is
+    known we still ingest them under a synthesized YYNN key (year + chronological
+    rank from the global sequence field row[5]) so no old history is lost."""
+    out = []
+    unnumbered = []
+    for row in rows:
+        tfbh = str(row[3]) if len(row) > 3 and row[3] is not None else ""
+        if tfbh.isdigit() and len(tfbh) == 4 and int(tfbh[2:]) >= 1:
+            status = str(row[7]).lower() if len(row) > 7 and row[7] is not None else ""
+            out.append({
+                "intl_id": tfbh, "internal_id": row[0], "name": _name_of(row),
+                "season": season_of(tfbh), "active": status == "start",
+            })
+        elif year is not None and tfbh == "1900":
+            unnumbered.append(row)  # old storm, no WMO number -> synthesize below
+        # else: 8-digit placeholder (unnamed depression) -> skip
+
+    if unnumbered and year is not None:
+        yy = year % 100
+        # row[5] is a global running sequence; ascending = chronological in-year.
+        unnumbered.sort(key=lambda r: r[5] if len(r) > 5 and isinstance(r[5], int) else r[0])
+        for i, row in enumerate(unnumbered, 1):
+            out.append({
+                "intl_id": f"{yy:02d}{i:02d}", "internal_id": row[0], "name": _name_of(row),
+                "season": year, "active": False,
+            })
+    return out
+
+
+def fetch_current_roster(emit=lambda m: None) -> list[dict]:
+    """Current-season roster with live start/stop status (list_default)."""
     try:
-        vd = _jsonp(_get(VIEW_URL.format(id=internal_id)))
-        arr = vd["typhoon"]
-        raw = arr[8] if len(arr) > 8 and isinstance(arr[8], list) else []
+        rows = _jsonp(_get(LIST_URL)).get("typhoonList", [])
     except Exception as e:  # noqa: BLE001
-        emit(f"  {tfbh} 跳过（{e}）")
-        return None
+        emit(f"  当季列表获取失败（{e}）")
+        return []
+    return _parse_roster(rows)
 
+
+def fetch_year_roster(year: int, emit=lambda m: None) -> list[dict]:
+    """Archived roster for one year (list_{year}); all storms are ended."""
+    try:
+        rows = _jsonp(_get(LIST_YEAR_URL.format(year=int(year)))).get("typhoonList", [])
+    except Exception as e:  # noqa: BLE001
+        emit(f"  {year} 年列表获取失败（{e}）")
+        return []
+    return _parse_roster(rows, year=int(year))
+
+
+# --- View (expensive: one storm's full observed track) ----------------------
+def _points(raw) -> list[ObsPoint]:
     points: list[ObsPoint] = []
     for p in raw:
         try:
-            obs = datetime.fromtimestamp(p[2] / 1000, tz=timezone.utc)
+            # Epoch + timedelta is OS-independent; datetime.fromtimestamp raises
+            # OSError [Errno 22] on Windows for out-of-range/garbage epoch values.
+            obs = _EPOCH + timedelta(milliseconds=int(p[2]))
             lon, lat = float(p[4]), float(p[5])
-        except (TypeError, ValueError, IndexError):
+        except (TypeError, ValueError, IndexError, OverflowError, OSError):
             continue
         points.append(ObsPoint(
             obs_time=obs, lat=lat, lon=lon,
@@ -83,39 +131,36 @@ def _parse_row(row, emit) -> AgencyStorm | None:
             move_dir=compass_to_deg(p[8]) if len(p) > 8 else None,
             move_speed=num(p[9]) if len(p) > 9 else None,
         ))
+    return points
+
+
+def fetch_view(entry: dict) -> AgencyStorm | None:
+    """Fetch one roster entry's full observed track -> AgencyStorm."""
+    try:
+        vd = _jsonp(_get(VIEW_URL.format(id=entry["internal_id"])))
+        arr = vd["typhoon"]
+        raw = arr[8] if len(arr) > 8 and isinstance(arr[8], list) else []
+    except Exception:  # noqa: BLE001
+        return None
+    points = _points(raw)
     if not points:
         return None
-    name = None if not name_en or name_en.lower() in ("nameless", "unnamed") else name_en.title()
-    status = str(row[7]).lower() if len(row) > 7 and row[7] is not None else ""
     return AgencyStorm(
-        intl_id=tfbh, name=name, season_year=season,
+        intl_id=entry["intl_id"], name=entry["name"], season_year=entry["season"],
         category=strongest_grade(pt.grade for pt in points), points=points,
-        active=(status == "start"),  # CMA: 'start' = ongoing, 'stop' = ended
+        active=entry["active"],
     )
 
 
 def fetch_storms(years=None, emit=lambda m: None) -> list[AgencyStorm]:
-    """Collect CMA actual tracks. `years` empty/None -> current season (live,
-    via list_default). Otherwise iterate the per-year archive list_{year} for
-    each requested year, so historical seasons can be ingested too."""
-    if years:
-        catalogs = [(y, LIST_YEAR_URL.format(year=int(y))) for y in years]
-    else:
-        catalogs = [(None, LIST_URL)]
-
+    """Convenience: fetch full tracks for a scope in one shot (no batching).
+    `years` empty -> current season; else each archived year."""
+    rosters = ([("cur", fetch_current_roster(emit))] if not years
+               else [(y, fetch_year_roster(y, emit)) for y in years])
     storms: list[AgencyStorm] = []
-    for yr, url in catalogs:
-        emit(f"获取 CMA 台风列表（{yr or '本季实况'}）…")
-        try:
-            rows = _jsonp(_get(url)).get("typhoonList", [])
-        except Exception as e:  # noqa: BLE001
-            emit(f"  列表 {yr} 获取失败（{e}），跳过")
-            continue
-        n0 = len(storms)
-        for row in rows:
-            st = _parse_row(row, emit)
+    for _, roster in rosters:
+        for entry in roster:
+            st = fetch_view(entry)
             if st:
                 storms.append(st)
-        emit(f"  {yr or '本季'}: 收集到 {len(storms) - n0} 个台风")
     return storms
-

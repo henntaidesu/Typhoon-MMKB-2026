@@ -1,8 +1,15 @@
 <template>
   <div class="ds">
     <header class="ds-head">
-      <h2>数据源</h2>
-      <p>选择数据源并开始爬取，数据将写入台风知识库。同一时间只能运行一个任务。</p>
+      <div class="ds-head-row">
+        <div></div>
+        <button class="update-btn" :disabled="busy" @click="startUpdate">
+          {{ updateState.status === 'running' ? '更新中…' : '更新进行中数据' }}
+        </button>
+      </div>
+      <div v-if="updateState.message" class="update-msg" :class="{ err: updateState.status === 'error' }">
+        {{ updateState.message }}
+      </div>
     </header>
 
     <div v-if="loadErr" class="ds-err">加载失败：{{ loadErr }}</div>
@@ -21,8 +28,6 @@
 
         <h3>{{ s.name }}</h3>
         <div class="provider">{{ s.provider }}</div>
-        <p class="desc">{{ s.description }}</p>
-        <div v-if="s.depends" class="depends">依赖：先运行「{{ depName(s.depends) }}」</div>
 
         <div v-if="s.params.length" class="params">
           <label v-for="p in s.params" :key="p.name" class="param">
@@ -60,6 +65,7 @@ const sources = ref([])
 const form = reactive({})       // key -> { paramName: value }
 const busy = ref(false)         // true while any crawl is active
 const loadErr = ref(null)
+const updateState = reactive({ status: 'idle', message: '' })  // the "更新进行中" action
 let timer = null
 
 // Small inline status badge component.
@@ -130,7 +136,20 @@ async function poll() {
       if (st) s.state = { status: st.status, message: st.message, counts: st.counts,
                           started_at: st.started_at, finished_at: st.finished_at }
     }
+    const u = status.update
+    if (u) { updateState.status = u.status; updateState.message = u.message }
   } catch { /* transient poll error — ignore */ }
+}
+
+async function startUpdate() {
+  try {
+    await api.startCrawl('update', {})
+    updateState.status = 'running'
+    updateState.message = '启动中…'
+    busy.value = true
+  } catch (e) {
+    alert(e.message || String(e))
+  }
 }
 
 async function start(s) {
@@ -156,8 +175,17 @@ onUnmounted(() => clearInterval(timer))
 
 <style scoped>
 .ds { height: 100%; overflow-y: auto; padding: 22px 26px; }
+.ds-head-row { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; }
 .ds-head h2 { margin: 0 0 4px; font-size: 20px; }
 .ds-head p { margin: 0 0 18px; color: #6b7787; font-size: 13px; }
+.update-btn {
+  flex: 0 0 auto; border: 1px solid #0b6bcb; background: #eaf3fc; color: #0b6bcb;
+  padding: 8px 14px; border-radius: 8px; font-size: 13px; font-weight: 600; white-space: nowrap;
+}
+.update-btn:hover:not(:disabled) { background: #0b6bcb; color: #fff; }
+.update-btn:disabled { border-color: #c3cedb; color: #a2adbb; background: #f1f4f8; cursor: not-allowed; }
+.update-msg { font-size: 12px; color: #445167; background: #f5f8fc; border-radius: 6px; padding: 7px 9px; margin-bottom: 14px; }
+.update-msg.err { color: #b93b3b; background: #fdecec; }
 .ds-err { background: #fdecec; color: #b93b3b; padding: 10px 12px; border-radius: 8px; margin-bottom: 14px; font-size: 13px; }
 
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; }
@@ -176,7 +204,6 @@ onUnmounted(() => clearInterval(timer))
 
 .card h3 { margin: 0; font-size: 16px; }
 .provider { color: #98a4b3; font-size: 12px; margin: 2px 0 8px; }
-.desc { color: #445167; font-size: 13px; line-height: 1.5; margin: 0 0 8px; flex: 1; }
 .depends { font-size: 12px; color: #c07a15; background: #fff6e6; padding: 4px 8px; border-radius: 6px; margin-bottom: 8px; }
 
 .params { display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; }

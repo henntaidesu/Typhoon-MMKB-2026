@@ -33,6 +33,13 @@ class AgencyStorm:
     active: bool | None = None   # still ongoing? (None = source doesn't say)
 
 
+def season_of(intl_id: str) -> int:
+    """WMO 编号 YYNN -> 4-digit season year. Data spans 1949..~2048, so a 2-digit
+    year >= 49 is the 20th century (1949-1999), otherwise the 21st (2000-2048)."""
+    yy = int(str(intl_id)[:2])
+    return (1900 if yy >= 49 else 2000) + yy
+
+
 def num(v) -> float | None:
     try:
         f = float(v)

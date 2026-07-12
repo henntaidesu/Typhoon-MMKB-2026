@@ -65,3 +65,10 @@ EMBEDDING_DIM = int(_get("embedding", "dim", "MMKB_EMBEDDING_DIM", "384"))
 
 # --- Spatial reference ------------------------------------------------------
 SRID = int(_get("spatial", "srid", "MMKB_SRID", "4326"))  # WGS84 lat/lon
+
+# --- External data-source credentials ---------------------------------------
+# ReliefWeb API v2 requires a *pre-approved* appname since 2025-11-01 (an
+# arbitrary one is rejected with HTTP 403). Register a domain/app name with
+# ReliefWeb, then set it here or via the RELIEFWEB_APPNAME env var. Left at the
+# placeholder default, the ReliefWeb source simply skips itself.
+RELIEFWEB_APPNAME = _get("reliefweb", "appname", "RELIEFWEB_APPNAME", "")

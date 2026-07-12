@@ -137,11 +137,12 @@ def _match_typhoon_by_time_space(
     cands = session.scalars(stmt).all()
     if not cands:
         return None
-    if len(cands) == 1 and (lat is None or lon is None):
-        return cands[0]
 
-    ids = [c.id for c in cands]
+    # When the record is located, the spatial test is authoritative: it must fall
+    # within a typhoon's impact corridor, else it isn't that storm's disaster (a
+    # located warning far from every corridor is rejected, NOT matched by time).
     if lat is not None and lon is not None:
+        ids = [c.id for c in cands]
         pt = func.ST_GeomFromEWKT(_wkt_point(lon, lat))
         row = session.execute(
             select(AffectedRegion.typhoon_id,
@@ -151,8 +152,12 @@ def _match_typhoon_by_time_space(
         ).first()
         if row is not None and row.d is not None and row.d <= _MAX_MATCH_DEG:
             return session.get(Typhoon, row.typhoon_id)
+        return None
 
-    # No usable location — pick the storm whose active window is closest in time.
+    # No location — a single active storm gets it; otherwise the temporally
+    # closest one.
+    if len(cands) == 1:
+        return cands[0]
     return min(cands, key=lambda t: min(
         abs((event_time - t.start_time).total_seconds()),
         abs((event_time - t.end_time).total_seconds()),
@@ -190,8 +195,8 @@ def _disaster_exists(session: Session, typhoon_id: int, r) -> bool:
 
 
 def load_disasters(records) -> int:
-    """Match secondary-disaster records (GDACS / ReliefWeb / NMC / MEM / FDMA) to
-    KB typhoons and insert SecondaryDisaster rows. Idempotent."""
+    """Match secondary-disaster records (GDACS / ReliefWeb / NMC / MEM / FDMA /
+    HKO / JMA) to KB typhoons and insert SecondaryDisaster rows. Idempotent."""
     n = 0
     with SessionLocal() as session:
         for r in records:
@@ -291,6 +296,60 @@ def _apply_meta(obj: Typhoon, st, agency: str, authoritative: bool) -> None:
             obj.is_active = True
         elif obj.is_active is None:
             obj.is_active = st.active
+
+
+def agency_status_map(agency: str) -> dict[str, bool | None]:
+    """intl_id -> is_active, for every typhoon that already has this agency's
+    track points. Used to plan incremental crawls: entries present are already
+    fetched; an is_active=True entry should still be refreshed."""
+    with SessionLocal() as session:
+        rows = session.execute(
+            select(Typhoon.intl_id, Typhoon.is_active).where(
+                Typhoon.id.in_(
+                    select(TrackPoint.typhoon_id).where(TrackPoint.agency == agency).distinct()
+                )
+            )
+        ).all()
+    return {intl_id: is_active for intl_id, is_active in rows}
+
+
+def cma_status_map() -> dict[str, bool | None]:
+    return agency_status_map("CMA")
+
+
+def agency_seasons(agency: str) -> set[int]:
+    """Season years that already have at least one of this agency's points."""
+    with SessionLocal() as session:
+        rows = session.execute(
+            select(Typhoon.season_year).where(
+                Typhoon.id.in_(
+                    select(TrackPoint.typhoon_id).where(TrackPoint.agency == agency).distinct()
+                )
+            ).distinct()
+        ).all()
+    return {r[0] for r in rows if r[0] is not None}
+
+
+def resolve_intl_id(name: str | None, year: int | None) -> str | None:
+    """Find an existing typhoon by name + season and return its WMO intl_id.
+    Used to attach JTWC best-track (keyed by JTWC's own number) to the right
+    storm by name."""
+    if not name:
+        return None
+    with SessionLocal() as session:
+        stmt = select(Typhoon.intl_id).where(func.lower(Typhoon.name) == name.lower())
+        if year:
+            stmt = stmt.where(Typhoon.season_year == year)
+        return session.scalar(stmt)
+
+
+def typhoon_exists(intl_id: str) -> bool:
+    """Whether a typhoon with this intl_id is already in the KB. Used as the
+    number-based fallback for old JTWC storms that carry no name."""
+    if not intl_id:
+        return False
+    with SessionLocal() as session:
+        return session.scalar(select(Typhoon.id).where(Typhoon.intl_id == intl_id)) is not None
 
 
 def load_agency_storms(storms, agency: str, authoritative: bool = False) -> tuple[int, int]:

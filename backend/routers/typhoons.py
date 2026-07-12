@@ -18,7 +18,7 @@ def list_typhoons(
     year: int | None = None,
     name: str | None = None,
     min_wind: float | None = None,
-    limit: int = Query(200, le=1000),
+    limit: int = Query(5000, le=20000),
 ):
     """Attribute query — filter typhoons by year / name / intensity."""
     stmt = select(Typhoon)
@@ -45,14 +45,32 @@ def get_typhoon(tid: int, session: Session = Depends(get_session)):
     return out
 
 
+# Which agency's track to draw as the main line, in order of preference.
+_AGENCY_PRIORITY = ["CMA", "JMA", "JTWC"]
+
+
 @router.get("/{tid}/track")
 def get_track(tid: int, session: Session = Depends(get_session)):
-    """Track as a GeoJSON Feature (LineString) with per-point intensity props."""
+    """Track as a GeoJSON Feature (LineString) with per-point intensity props.
+
+    A typhoon may carry several agencies' tracks (CMA/JMA/JTWC). Drawing them all
+    as one time-sorted line would zig-zag between agencies, so we return a single
+    primary agency's track (CMA preferred) and list the other available agencies
+    in the properties for optional overlay."""
     pts = session.scalars(
         select(TrackPoint).where(TrackPoint.typhoon_id == tid).order_by(TrackPoint.obs_time)
     ).all()
     if not pts:
         raise HTTPException(404, "no track points")
+
+    agencies = {p.agency for p in pts}
+    primary = next((a for a in _AGENCY_PRIORITY if a in agencies), None)
+    if primary is not None or agencies:
+        chosen = primary if primary is not None else next(iter(agencies))
+        pts = [p for p in pts if p.agency == chosen]
+    else:
+        chosen = None
+
     coords = [[p.lon, p.lat] for p in pts]
     props = [
         {"time": p.obs_time.isoformat(), "wind_kt": p.wind_kt,
@@ -62,7 +80,11 @@ def get_track(tid: int, session: Session = Depends(get_session)):
     return {
         "type": "Feature",
         "geometry": {"type": "LineString", "coordinates": coords},
-        "properties": {"typhoon_id": tid, "points": props},
+        "properties": {
+            "typhoon_id": tid, "points": props,
+            "agency": chosen,
+            "agencies": sorted(a for a in agencies if a),
+        },
     }
 
 

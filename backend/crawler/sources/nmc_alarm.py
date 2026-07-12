@@ -47,25 +47,58 @@ def _get_json(url: str, params: dict | None = None):
 
 
 def _as_list(data) -> list[dict]:
-    """findAlarm has returned a few shapes over time; normalise to a row list."""
+    """Normalise findAlarm's response to the alarm row list. Current shape is
+    {"data": {"page": {"list": [...]}}}; older/simpler shapes are handled too."""
     if isinstance(data, list):
         return data
-    if isinstance(data, dict):
-        for key in ("data", "list", "rows"):
-            v = data.get(key)
-            if isinstance(v, list):
-                return v
-            if isinstance(v, dict) and isinstance(v.get("list"), list):
-                return v["list"]
+    if not isinstance(data, dict):
+        return []
+    # Descend common wrappers until we find a list named "list"/"rows".
+    for node in (data, data.get("data"), (data.get("data") or {}).get("page")
+                 if isinstance(data.get("data"), dict) else None):
+        if isinstance(node, dict):
+            for key in ("list", "rows"):
+                if isinstance(node.get(key), list):
+                    return node[key]
+        if isinstance(node, list):
+            return node
     return []
+
+
+# CN province -> approximate centroid (lat, lon). NMC alarm titles begin with the
+# issuing locality ("江西省抚州市…"), so we geocode by the leading province name.
+# This lets the loader spatially match a warning to a nearby typhoon corridor
+# instead of tying every current alarm to any active storm.
+_PROVINCE_LL: dict[str, tuple[float, float]] = {
+    "北京": (39.90, 116.41), "天津": (39.13, 117.20), "河北": (38.04, 114.51),
+    "山西": (37.87, 112.55), "内蒙古": (40.82, 111.75), "辽宁": (41.84, 123.43),
+    "吉林": (43.90, 125.33), "黑龙江": (45.80, 126.64), "上海": (31.23, 121.47),
+    "江苏": (32.06, 118.80), "浙江": (30.27, 120.15), "安徽": (31.86, 117.28),
+    "福建": (26.08, 119.30), "江西": (28.68, 115.89), "山东": (36.67, 117.02),
+    "河南": (34.76, 113.65), "湖北": (30.55, 114.34), "湖南": (28.23, 112.94),
+    "广东": (23.13, 113.27), "广西": (22.82, 108.32), "海南": (20.02, 110.35),
+    "重庆": (29.56, 106.55), "四川": (30.65, 104.08), "贵州": (26.65, 106.63),
+    "云南": (25.04, 102.71), "西藏": (29.65, 91.13), "陕西": (34.26, 108.95),
+    "甘肃": (36.06, 103.83), "青海": (36.62, 101.78), "宁夏": (38.49, 106.23),
+    "新疆": (43.83, 87.62), "香港": (22.30, 114.17), "澳门": (22.20, 113.55),
+    "台湾": (23.70, 120.96),
+}
+
+
+def _province_ll(title: str) -> tuple[str | None, float | None, float | None]:
+    for name, (lat, lon) in _PROVINCE_LL.items():
+        if title.startswith(name):
+            return name, lat, lon
+    return None, None, None
 
 
 def _parse_dt(s) -> datetime | None:
     if not s:
         return None
-    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y/%m/%d %H:%M:%S",
+                "%Y-%m-%d %H:%M", "%Y/%m/%d %H:%M", "%Y-%m-%dT%H:%M:%S"):
         try:
-            return datetime.strptime(str(s)[:19], fmt).replace(tzinfo=timezone.utc)
+            return datetime.strptime(str(s).strip(), fmt).replace(tzinfo=timezone.utc)
         except ValueError:
             continue
     try:
@@ -74,7 +107,7 @@ def _parse_dt(s) -> datetime | None:
         return None
 
 
-def fetch_alarms(page_size: int = 100, emit=lambda m: None) -> list[dict]:
+def fetch_alarms(page_size: int = 300, emit=lambda m: None) -> list[dict]:
     try:
         data = _get_json(ALARM_URL, {"pageNo": 1, "pageSize": page_size})
     except Exception as e:  # noqa: BLE001
@@ -94,12 +127,14 @@ def _pick(row: dict, *keys):
 def parse_alarms(rows: list[dict]) -> list[DisasterRec]:
     recs: list[DisasterRec] = []
     for row in rows:
+        # Hazard type is embedded in the title (e.g. "…发布暴雨黄色预警信号");
+        # there is no separate signaltype field in the current feed.
         title = _pick(row, "title", "headline", "name") or ""
         signal = _pick(row, "signaltype", "signalType", "type") or title
         if not any(sig in str(signal) or sig in title for sig in _SECONDARY_SIGNALS):
             continue
         ts = _parse_dt(_pick(row, "issuetime", "issueTime", "sendTime", "effective"))
-        province = _pick(row, "province", "area", "region")
+        province, lat, lon = _province_ll(title)
         level = _pick(row, "signallevel", "signalLevel", "level") or ""
         url = _pick(row, "url", "link")
         if url and str(url).startswith("/"):
@@ -107,6 +142,7 @@ def parse_alarms(rows: list[dict]) -> list[DisasterRec]:
         recs.append(DisasterRec(
             disaster_type=classify_type(f"{signal} {title}"),
             event_time=ts,
+            lat=lat, lon=lon,
             description=f"[中央气象台预警] {level} {title}".strip()[:800],
             source="NMC",
             source_url=url,

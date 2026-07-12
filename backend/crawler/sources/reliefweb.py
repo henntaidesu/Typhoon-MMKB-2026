@@ -7,10 +7,14 @@ disasters over the West-Pacific rim countries, then pull the linked reports and
 mine their titles/bodies for the storm name and impact figures (casualties /
 economic loss). Each becomes a name-matched SecondaryDisaster.
 
-  https://api.reliefweb.int/v1/disasters   -> TC disasters (name + date)
-  https://api.reliefweb.int/v1/reports     -> official reports per disaster
+  https://api.reliefweb.int/v2/reports     -> official reports per disaster
 
-Offline test:  python crawler/sources/reliefweb.py --preview --years 2023
+API NOTE: v1 was decommissioned; this uses v2. Since 2025-11-01 the API rejects
+any non-approved `appname` with HTTP 403, so the appname must be pre-registered
+(https://reliefweb.int/help/api) and configured via conf.ini [reliefweb] appname
+or the RELIEFWEB_APPNAME env var. Without one, this source skips itself.
+
+Offline test:  RELIEFWEB_APPNAME=your-app python crawler/sources/reliefweb.py --preview --years 2023
 """
 from __future__ import annotations
 
@@ -25,22 +29,30 @@ _BACKEND = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 if _BACKEND not in sys.path:
     sys.path.insert(0, _BACKEND)
 
+from config import RELIEFWEB_APPNAME  # noqa: E402
 from crawler.sources.disaster_common import (  # noqa: E402
     DisasterRec, classify_type, extract_casualties, extract_loss_usd,
     extract_typhoon_name,
 )
 
-API = "https://api.reliefweb.int/v1"
-APPNAME = "typhoon-mmkb"
+API = "https://api.reliefweb.int/v2"
 # West-Pacific basin rim — where our typhoons make landfall / cause impact.
 WP_COUNTRIES = ("China", "Japan", "Philippines", "Viet Nam", "Republic of Korea",
                 "Taiwan", "Hong Kong", "Macau")
 
 
+class ReliefWebNotConfigured(RuntimeError):
+    """Raised when no approved appname is available, so the caller can skip."""
+
+
 def _post(path: str, payload: dict) -> list[dict]:
+    if not RELIEFWEB_APPNAME:
+        raise ReliefWebNotConfigured(
+            "no approved appname; set conf.ini [reliefweb] appname or RELIEFWEB_APPNAME"
+        )
     with httpx.Client(timeout=60.0, follow_redirects=True,
-                      headers={"User-Agent": APPNAME}) as c:
-        r = c.post(f"{API}/{path}", params={"appname": APPNAME}, json=payload)
+                      headers={"User-Agent": RELIEFWEB_APPNAME}) as c:
+        r = c.post(f"{API}/{path}", params={"appname": RELIEFWEB_APPNAME}, json=payload)
         r.raise_for_status()
         return r.json().get("data", [])
 
@@ -111,6 +123,9 @@ def parse_reports(data: list[dict]) -> list[DisasterRec]:
 
 
 def collect(years: list[int], emit=lambda m: None) -> list[DisasterRec]:
+    if not RELIEFWEB_APPNAME:
+        emit("  ReliefWeb 跳过：未配置已审批的 appname（见 conf.ini [reliefweb]）")
+        return []
     all_recs: list[DisasterRec] = []
     for y in years:
         try:
