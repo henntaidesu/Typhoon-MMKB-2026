@@ -1,0 +1,14 @@
+* { box-sizing: border-box; }
+html, body, #app { height: 100%; margin: 0; }
+body {
+  font-family: "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+  color: #1a2233;
+  background: #eef1f5;
+}
+:root {
+  --sidebar-w: 320px;
+  --accent: #0b6bcb;
+  --danger: #d64545;
+}
+button { font-family: inherit; cursor: pointer; }
+input { font-family: inherit; }

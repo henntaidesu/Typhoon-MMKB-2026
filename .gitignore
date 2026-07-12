@@ -1,0 +1,93 @@
+# ===========================================================================
+# Secrets & local config  —  KEEP OUT OF VERSION CONTROL
+# ===========================================================================
+# conf.ini holds real DB credentials (see backend/config.py). Commit a
+# sanitized backend/conf.ini.example instead.
+backend/conf.ini
+conf.ini
+*.local.ini
+.env
+.env.*
+!.env.example
+
+# ===========================================================================
+# Python (backend)
+# ===========================================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+*.egg-info/
+*.egg
+.installed.cfg
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Testing / coverage / caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+
+# ===========================================================================
+# Node / frontend (Vite)
+# ===========================================================================
+node_modules/
+frontend/node_modules/
+frontend/dist/
+dist/
+.vite/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ===========================================================================
+# Bundled / vendored binaries & archives (rebuildable, large)
+# ===========================================================================
+# Prebuilt pgvector for PG18 — vendored, not source. Track the source, not
+# the extracted build. Remove these lines if you intend to vendor it on purpose.
+pgvector-pg18-win-x64/
+pgvector-pg18-win-x64.zip
+*.zip
+*.7z
+*.tar.gz
+
+# ===========================================================================
+# Database / data dumps
+# ===========================================================================
+*.sqlite
+*.sqlite3
+*.db
+*.dump
+*.sql.gz
+
+# ===========================================================================
+# Editors & OS
+# ===========================================================================
+.vscode/
+.idea/
+*.swp
+*.swo
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+.DS_Store

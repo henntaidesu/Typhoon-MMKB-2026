@@ -1,0 +1,11 @@
+# Crawler — install into conda env MMKB (Python 3.12)
+httpx>=0.27
+pandas>=2.2
+beautifulsoup4>=4.12
+lxml>=5.0
+shapely>=2.0
+sqlalchemy>=2.0
+psycopg[binary]>=3.2
+geoalchemy2>=0.15
+pgvector>=0.3
+sentence-transformers>=3.0

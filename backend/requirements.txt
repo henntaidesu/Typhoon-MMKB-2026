@@ -1,0 +1,10 @@
+# Backend (FastAPI) — install into conda env MMKB (Python 3.12)
+fastapi>=0.139
+uvicorn[standard]>=0.51
+sqlalchemy>=2.0
+psycopg[binary]>=3.2
+geoalchemy2>=0.15
+pgvector>=0.3
+shapely>=2.0
+sentence-transformers>=3.0
+pydantic>=2.7
