@@ -42,16 +42,19 @@ GET /search/stats   ->  { typhoons_by_year, disasters_by_type, top_countries, to
 
 ```
 GET /stats/by-country
-  -> [{iso_a3, country, typhoon_count, landfall_count}]   # 各国受影响台风数 + 登陆次数
-GET /stats/by-region?level=1&country=CN&min_year=&max_year=
-  -> [{admin_region_id, name, country, landfall_count, impact_count}]  # 某省被登陆多少次
+  -> [{admin_region_id, iso_a3, country, typhoon_count, landfall_count}]   # 各国受影响台风数 + 登陆次数
+GET /stats/by-region?level=1|2&country=CN&min_year=&max_year=
+  -> [{admin_region_id, name, country, parent_name, landfall_count, impact_count}]  # 某省/地级市被登陆多少次
 GET /typhoons/{id}/countries
   -> [{name, iso_a3, admin_level, passed_over, landfall, within_corridor, min_distance_deg, max_wind_kt, landfall_time}]
+GET /stats/region/{admin_region_id}/tracks?landfall_only=
+  -> FeatureCollection(LineString)   # 影响该区域的所有台风路径（交互式：点击区域即在地图上画出）
 ```
 数据来自 `typhoon_region_impact` / `landfall`（`backend/crawler/enrich.py` 用
-`ST_Contains` / `ST_Intersects` / `ST_Distance` 派生）。示例真实结果：
-登陆次数 China 600 > Philippines 527 > Japan 284 > Vietnam 250 > Taiwan 106；
-中国省份 广东 217 > 海南 121 > 福建 111。
+`ST_Intersects` / `ST_DWithin` / `ST_Contains` 派生；主机构轨迹归一避免重复计数）。
+支持三级粒度：`level=0` 国家、`level=1` 省、`level=2` 地级市（GADM）。示例真实结果：
+登陆次数 China 600 > Philippines 527 > Japan 284；中国省份 广东 217 > 海南 121 > 福建 111；
+中国地级市 海南 94 > 湛江 42 > 福州 26 > 茂名 25 > 阳江 22。
 
 ---
 ### GeoJSON 输出（供 Leaflet 直接渲染）

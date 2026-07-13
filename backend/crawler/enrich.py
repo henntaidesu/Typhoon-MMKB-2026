@@ -16,7 +16,8 @@ from __future__ import annotations
 import os
 import sys
 
-from sqlalchemy import and_, func, select
+from sqlalchemy import and_, func, select, text
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session, aliased
 
 _BACKEND = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -99,19 +100,24 @@ def compute_impacts_for(session: Session, typhoon: Typhoon) -> int:
     cand1_ids = [c.id for c in cand if c.admin_level == 1]
     cand2_ids = [c.id for c in cand if c.admin_level == 2]
 
-    # --- Pass 1: line-based passed_over + min distance, per candidate region.
+    # --- Pass 1: passed_over + within_corridor, per candidate region.
+    # Index-friendly predicates ONLY — ST_Intersects / ST_DWithin ride the GiST
+    # index and short-circuit. (Exact ST_Distance over hundreds of detailed
+    # admin-2 polygons is O(vertices) and OOM-crashed the PostGIS backend, so we
+    # avoid it; min_distance is coarse: 0 if the eye crossed, else unknown.)
     line = func.ST_GeomFromEWKT(line_wkt)
     impacts: dict[int, dict] = {}
-    for rid, crossed, dist in session.execute(
+    for rid, crossed, near in session.execute(
         select(AdminRegion.id,
                func.ST_Intersects(AdminRegion.geom, line),
-               func.ST_Distance(AdminRegion.geom, line))
+               func.ST_DWithin(AdminRegion.geom, line, _CORRIDOR_DEG))
         .where(AdminRegion.id.in_(cand_ids))
     ).all():
+        passed = bool(crossed)
         impacts[rid] = {
-            "passed_over": bool(crossed),
-            "min_distance_deg": float(dist) if dist is not None else None,
-            "within_corridor": dist is not None and dist <= _CORRIDOR_DEG,
+            "passed_over": passed,
+            "within_corridor": bool(near),
+            "min_distance_deg": 0.0 if passed else None,
             "max_wind_kt": None, "first_time": None, "last_time": None,
             "landfall": False, "landfall_time": None,
         }
@@ -176,14 +182,11 @@ def _record_landfall(session, typhoon, row, country_id, cand1_ids, cand2_ids, ca
     and snap the point to the coast."""
     obs_time, lon, lat, wind, pres, grade, _ = row
     b_pt = func.ST_GeomFromEWKT(f"SRID={SRID};POINT({lon} {lat})")
-
-    # Snap the landfall marker to the country's coastline near the first land fix.
-    snapped = session.execute(
-        select(func.ST_X(func.ST_ClosestPoint(func.ST_Boundary(AdminRegion.geom), b_pt)),
-               func.ST_Y(func.ST_ClosestPoint(func.ST_Boundary(AdminRegion.geom), b_pt)))
-        .where(AdminRegion.id == country_id)
-    ).first()
-    lf_lon, lf_lat = (snapped[0], snapped[1]) if snapped and snapped[0] is not None else (lon, lat)
+    # Landfall marker = the first over-land fix. (We used to snap it to the
+    # coastline via ST_ClosestPoint(ST_Boundary(country)), but ST_Boundary on a
+    # huge country multipolygon is expensive/risky; the first land fix is already
+    # near the coast given 6-hourly best-track spacing.)
+    lf_lon, lf_lat = lon, lat
 
     # Most-specific region: prefer admin-2 (prefecture/city), then admin-1
     # province, else the country.
@@ -226,11 +229,24 @@ def _record_landfall(session, typhoon, row, country_id, cand1_ids, cand2_ids, ca
     return 1
 
 
+def _new_session() -> Session:
+    """A session with a per-statement timeout so a pathological spatial query is
+    cancelled server-side instead of running away / crashing the backend."""
+    s = SessionLocal()
+    try:
+        s.execute(text("SET statement_timeout = '120s'"))
+    except Exception:  # noqa: BLE001
+        pass
+    return s
+
+
 def backfill(force: bool = False) -> tuple[int, int]:
-    """Enrich every typhoon (incrementally unless force). Returns
+    """Enrich every typhoon (incrementally unless force). Resilient: one bad
+    storm (or a transient connection drop) is skipped, not fatal. Returns
     (typhoons_processed, landfalls_written)."""
     n_ty = n_lf = 0
-    with SessionLocal() as session:
+    session = _new_session()
+    try:
         if session.scalar(select(func.count()).select_from(AdminRegion)) == 0:
             raise RuntimeError("admin_region 为空：请先运行 naturalearth 加载行政边界。")
 
@@ -239,17 +255,33 @@ def backfill(force: bool = False) -> tuple[int, int]:
             already = select(TyphoonRegionImpact.typhoon_id).distinct()
             stmt = stmt.where(Typhoon.id.notin_(already))
         ids = [r[0] for r in session.execute(stmt).all()]
+        total = len(ids)
 
-        for tid in ids:
-            typhoon = session.get(Typhoon, tid)
-            if typhoon is None:
-                continue
-            n_lf += compute_impacts_for(session, typhoon)
-            n_ty += 1
-            if n_ty % 50 == 0:
-                session.commit()
-                print(f"[enrich] processed {n_ty}/{len(ids)} typhoons, {n_lf} landfalls")
+        for i, tid in enumerate(ids, 1):
+            try:
+                typhoon = session.get(Typhoon, tid)
+                if typhoon is not None:
+                    n_lf += compute_impacts_for(session, typhoon)
+                    n_ty += 1
+                if i % 50 == 0:
+                    session.commit()
+                    print(f"[enrich] processed {i}/{total} typhoons, {n_lf} landfalls")
+            except OperationalError as e:  # connection dropped — reconnect & skip
+                try:
+                    session.close()
+                except Exception:  # noqa: BLE001
+                    pass
+                session = _new_session()
+                print(f"[enrich] reconnected after error on typhoon {tid}: {str(e)[:80]}")
+            except Exception as e:  # noqa: BLE001 — one bad storm must not abort
+                try:
+                    session.rollback()
+                except Exception:  # noqa: BLE001
+                    pass
+                print(f"[enrich] skip typhoon {tid}: {str(e)[:120]}")
         session.commit()
+    finally:
+        session.close()
     return n_ty, n_lf
 
 

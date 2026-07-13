@@ -101,9 +101,11 @@ erDiagram
 
 ## 地理影响层 (Geographic Impact — 新增)
 
-`ADMIN_REGION` 是从 **Natural Earth (public domain)** 加载的参考行政边界
-（国家 admin-0 + 省/县 admin-1，仅西太平洋沿岸国家），由
-`backend/crawler/sources/naturalearth.py` + `load.load_admin_regions` 一次性入库。
+`ADMIN_REGION` 是参考行政边界，分三级（`admin_level` = 0 国家 / 1 省 / 2 地级市）：
+- **国家 + 省**：**Natural Earth (public domain)**，`backend/crawler/sources/naturalearth.py`。
+- **地级市（admin-2）**：**GADM 4.1（学术用途）**，`backend/crawler/sources/gadm.py`——中国 368 个地级市
+  （含省份 `parent_name` 与中文名）+ 周边国家的二级行政区。
+两者都经 `load.load_admin_regions` 幂等入库（按 `ne_id`）。
 
 `backend/crawler/enrich.py` 把每个台风的**主机构轨迹**（CMA→JMA→JTWC 优先，避免多机构
 重复计数）与 `ADMIN_REGION` 做 PostGIS 空间连接，派生两张事实表：

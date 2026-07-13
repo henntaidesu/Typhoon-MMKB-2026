@@ -80,7 +80,7 @@ def by_country(session: Session = Depends(get_session)):
 @router.get("/by-region")
 def by_region(
     session: Session = Depends(get_session),
-    level: int = Query(1, ge=0, le=1),
+    level: int = Query(1, ge=0, le=2),
     country: str | None = Query(None, description="parent country ISO-A2 or name"),
     min_year: int | None = None,
     max_year: int | None = None,
@@ -119,7 +119,7 @@ def by_region(
 @router.get("/landfall-geojson")
 def landfall_geojson(
     session: Session = Depends(get_session),
-    level: int = Query(0, ge=0, le=1),
+    level: int = Query(0, ge=0, le=2),
     bbox: str | None = Query(None, description="minLon,minLat,maxLon,maxLat"),
 ):
     """Choropleth-ready FeatureCollection of admin polygons, each carrying its
@@ -149,10 +149,13 @@ def landfall_geojson(
         if not geo:
             continue
         lfc = lf_map.get(rid, 0)
-        # Countries (level 0) always render for context; finer levels only render
-        # regions actually touched, so the map stays light and readable (admin-2
-        # has thousands of inland units that were never in any storm's path).
-        if level >= 1 and not (lfc or impc):
+        # Countries (level 0) always render for context. Provinces (level 1)
+        # render if touched at all (corridor or landfall). Prefectures/cities
+        # (level 2) are thousands of units — render only actual landfall sites,
+        # so the choropleth payload stays small and on-topic (登陆频次).
+        if level == 1 and not (lfc or impc):
+            continue
+        if level >= 2 and not lfc:
             continue
         max_lf = max(max_lf, lfc)
         feats.append({

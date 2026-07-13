@@ -9,6 +9,7 @@ flowchart TB
     A2["GDACS (UN/EC)<br/>热带气旋灾害事件"]
     A3["Digital Typhoon (NII)<br/>卫星影像 + 灾情"]
     A4["Natural Earth<br/>国家/省 行政边界"]
+    A5["GADM 4.1<br/>地级市 (admin-2)"]
   end
 
   subgraph CRW["爬虫 / 元数据统合 (backend/crawler/)"]
@@ -16,7 +17,7 @@ flowchart TB
     B2["gdacs.py"]
     B3["digital_typhoon.py"]
     B4["embed.py<br/>多语言向量化"]
-    B6["naturalearth.py<br/>行政边界"]
+    B6["naturalearth.py / gadm.py<br/>行政边界(含地级市)"]
     B7["enrich.py<br/>地理影响派生"]
     B5["pipeline.py 编排"]
   end
@@ -27,7 +28,7 @@ flowchart TB
     D3["affected_region 多边形"]
     D4["secondary_disaster<br/>PostGIS geom + embedding"]
     D5["media_asset 多媒体元数据"]
-    D6["admin_region 行政边界"]
+    D6["admin_region 行政边界<br/>国家/省/地级市"]
     D7["typhoon_region_impact / landfall<br/>地理影响事实"]
     DE["扩展: PostGIS + pgvector"]
   end
@@ -46,13 +47,14 @@ flowchart TB
     F2["时间轴回放 (走势)"]
     F3["语义联想检索框"]
     F4["详情: 强度曲线 + 受影响国家 + 灾害列表"]
-    F5["统计: 登陆频次分级地图 + 柱状图"]
+    F5["统计(交互): 三级分级地图(国家/省/地级市)<br/>点击区域→画出相关台风路径 + 柱状图"]
   end
 
   A1-->B1-->B5
   A2-->B2-->B5
   A3-->B3-->B5
   A4-->B6-->B5
+  A5-->B6
   B5-->B4
   B5-->B7
   B5-->DB
