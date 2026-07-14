@@ -13,9 +13,12 @@ from sqlalchemy import and_, func, select
 from sqlalchemy.orm import Session
 
 from db import get_session
-from models import AdminRegion, Landfall, SecondaryDisaster, Typhoon, TrackPoint, TyphoonRegionImpact
+from models import (
+    AdminRegion, Landfall, PublicInfo, SecondaryDisaster, Typhoon, TrackPoint,
+    TyphoonRegionImpact,
+)
 from schemas import SemanticQuery, TyphoonBrief
-from services.semantic import semantic_disasters, semantic_typhoons
+from services.semantic import semantic_disasters, semantic_public_info, semantic_typhoons
 
 router = APIRouter(prefix="/search", tags=["search"])
 
@@ -33,7 +36,15 @@ def search_semantic(body: SemanticQuery, session: Session = Depends(get_session)
          "distance": round(dist, 4)}
         for d, dist in semantic_disasters(session, body.q, body.k)
     ]
-    return {"query": body.q, "typhoons": typhoons, "disasters": disasters}
+    public_info = [
+        {"id": p.id, "typhoon_id": p.typhoon_id, "info_type": p.info_type,
+         "category": p.category, "agency": p.agency, "severity": p.severity,
+         "title": p.title, "description": p.body, "lat": p.lat, "lon": p.lon,
+         "source_url": p.source_url, "distance": round(dist, 4)}
+        for p, dist in semantic_public_info(session, body.q, body.k)
+    ]
+    return {"query": body.q, "typhoons": typhoons,
+            "disasters": disasters, "public_info": public_info}
 
 
 def _bbox_env(bbox: str):
@@ -105,6 +116,9 @@ def stats(session: Session = Depends(get_session)):
     by_type = session.execute(
         select(SecondaryDisaster.disaster_type, func.count()).group_by(SecondaryDisaster.disaster_type)
     ).all()
+    public_by_type = session.execute(
+        select(PublicInfo.info_type, func.count()).group_by(PublicInfo.info_type)
+    ).all()
     # Top affected countries by distinct typhoons (admin-0 impacts).
     top_countries = session.execute(
         select(AdminRegion.name,
@@ -117,8 +131,10 @@ def stats(session: Session = Depends(get_session)):
     return {
         "typhoons_by_year": [{"year": y, "count": c} for y, c in by_year],
         "disasters_by_type": [{"type": t, "count": c} for t, c in by_type],
+        "public_info_by_type": [{"type": t, "count": c} for t, c in public_by_type],
         "top_countries": [{"country": n, "count": c} for n, c in top_countries],
         "total_typhoons": session.scalar(select(func.count()).select_from(Typhoon)),
         "total_disasters": session.scalar(select(func.count()).select_from(SecondaryDisaster)),
+        "total_public_info": session.scalar(select(func.count()).select_from(PublicInfo)),
         "total_landfalls": session.scalar(select(func.count()).select_from(Landfall)),
     }

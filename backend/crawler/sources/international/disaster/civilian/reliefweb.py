@@ -14,7 +14,7 @@ any non-approved `appname` with HTTP 403, so the appname must be pre-registered
 (https://reliefweb.int/help/api) and configured via conf.ini [reliefweb] appname
 or the RELIEFWEB_APPNAME env var. Without one, this source skips itself.
 
-Offline test:  RELIEFWEB_APPNAME=your-app python crawler/sources/reliefweb.py --preview --years 2023
+Offline test:  RELIEFWEB_APPNAME=your-app python crawler/sources/international/disaster/civilian/reliefweb.py --preview --years 2023
 """
 from __future__ import annotations
 
@@ -25,12 +25,14 @@ from datetime import datetime, timezone
 
 import httpx
 
-_BACKEND = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+_BACKEND = os.path.dirname(os.path.abspath(__file__))
+while os.path.basename(_BACKEND) != "backend" and os.path.dirname(_BACKEND) != _BACKEND:
+    _BACKEND = os.path.dirname(_BACKEND)
 if _BACKEND not in sys.path:
     sys.path.insert(0, _BACKEND)
 
 from config import RELIEFWEB_APPNAME  # noqa: E402
-from crawler.sources.disaster_common import (  # noqa: E402
+from crawler.sources._shared.disaster_common import (  # noqa: E402
     DisasterRec, classify_type, extract_casualties, extract_loss_usd,
     extract_typhoon_name,
 )

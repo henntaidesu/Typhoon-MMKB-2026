@@ -22,7 +22,8 @@ if _BACKEND not in sys.path:
 from config import SRID  # noqa: E402
 from db import SessionLocal  # noqa: E402
 from models import (  # noqa: E402
-    AdminRegion, AffectedRegion, MediaAsset, SecondaryDisaster, Typhoon, TrackPoint,
+    AdminRegion, AffectedRegion, MediaAsset, PublicInfo, SecondaryDisaster,
+    Typhoon, TrackPoint,
 )
 
 
@@ -98,7 +99,16 @@ def _match_typhoon(session: Session, name: str | None, year: int | None) -> Typh
     if not name:
         return None
     base = _strip_suffix(name)
-    stmt = select(Typhoon).where(func.lower(Typhoon.name) == base)
+    # Match the English name (lower-cased) OR the localized CN/JP name verbatim,
+    # so a bulletin that quotes 台风“巴威” / 台風「マーワー」 resolves as well as an
+    # English "Typhoon Bavi". The English column is the common case; the local
+    # columns catch CN/JP official bulletins (NMC / MEM / 消防庁).
+    orig = name.split("-")[0].strip()
+    stmt = select(Typhoon).where(
+        (func.lower(Typhoon.name) == base)
+        | (Typhoon.name_cn == orig)
+        | (Typhoon.name_jp == orig)
+    )
     if year:
         stmt = stmt.where(Typhoon.season_year == year)
     return session.scalar(stmt)
@@ -212,6 +222,51 @@ def load_disasters(records) -> int:
                 casualties=r.casualties, economic_loss_usd=r.economic_loss_usd,
                 description=r.description, source=r.source, source_url=r.source_url,
                 region_name=getattr(r, "region_name", None),
+            ))
+            n += 1
+        session.commit()
+    return n
+
+
+def _public_info_exists(session: Session, typhoon_id: int, r) -> bool:
+    """Idempotency guard so re-ingesting the same feed doesn't duplicate rows."""
+    stmt = select(PublicInfo.id).where(
+        PublicInfo.typhoon_id == typhoon_id,
+        PublicInfo.source == r.source,
+    )
+    url = getattr(r, "source_url", None)
+    if url:
+        stmt = stmt.where(PublicInfo.source_url == url)
+    else:
+        stmt = stmt.where(PublicInfo.body == r.description)
+    return session.scalar(stmt) is not None
+
+
+def load_public_info(records) -> int:
+    """Match public-information records (公共情报: warnings / advisories /
+    evacuation / news) to KB typhoons and insert PublicInfo rows. Uses the same
+    intl_id -> name -> time/space resolution as disasters. Idempotent."""
+    n = 0
+    with SessionLocal() as session:
+        for r in records:
+            t = _resolve_typhoon(session, r)
+            if t is None:
+                continue  # can't tie it to a WP typhoon in our KB
+            if _public_info_exists(session, t.id, r):
+                continue
+            geom = _wkt_point(r.lon, r.lat) if (r.lon is not None and r.lat is not None) else None
+            session.add(PublicInfo(
+                typhoon_id=t.id,
+                info_type=r.info_type,
+                category=getattr(r, "category", None),
+                agency=getattr(r, "agency", None) or r.source,
+                severity=getattr(r, "severity", None),
+                title=getattr(r, "title", None),
+                body=r.description,
+                geom=geom, lat=r.lat, lon=r.lon,
+                publish_time=r.event_time,
+                region_name=getattr(r, "region_name", None),
+                source=r.source, source_url=r.source_url,
             ))
             n += 1
         session.commit()

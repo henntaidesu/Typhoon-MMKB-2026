@@ -11,7 +11,7 @@ Real-time feed (current signals only).
 
   .../weather.php?dataType=warnsum -> {code: {name, issueTime, ...}}
 
-Offline test:  python crawler/sources/hko.py --preview
+Offline test:  python crawler/sources/china/disaster/government/hko.py --preview
 """
 from __future__ import annotations
 
@@ -22,11 +22,14 @@ from datetime import datetime
 
 import httpx
 
-_BACKEND = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+_BACKEND = os.path.dirname(os.path.abspath(__file__))
+while os.path.basename(_BACKEND) != "backend" and os.path.dirname(_BACKEND) != _BACKEND:
+    _BACKEND = os.path.dirname(_BACKEND)
 if _BACKEND not in sys.path:
     sys.path.insert(0, _BACKEND)
 
-from crawler.sources.disaster_common import DisasterRec, classify_type  # noqa: E402
+from crawler.sources._shared.disaster_common import classify_type  # noqa: E402
+from crawler.sources._shared.public_common import INFO_WARNING, PublicInfoRec  # noqa: E402
 
 WARNSUM_URL = "https://data.weather.gov.hk/weatherAPI/opendata/weather.php?dataType=warnsum&lang=en"
 _H = {"User-Agent": "Mozilla/5.0"}
@@ -67,8 +70,8 @@ def fetch_warnings(emit=lambda m: None) -> dict:
         return {}
 
 
-def parse_warnings(warnsum: dict) -> list[DisasterRec]:
-    recs: list[DisasterRec] = []
+def parse_warnings(warnsum: dict) -> list[PublicInfoRec]:
+    recs: list[PublicInfoRec] = []
     for code, w in (warnsum or {}).items():
         if code not in _SECONDARY:
             continue
@@ -79,8 +82,12 @@ def parse_warnings(warnsum: dict) -> list[DisasterRec]:
             continue
         name = w.get("name") or code
         ts = _parse_dt(w.get("issueTime") or w.get("updateTime"))
-        recs.append(DisasterRec(
-            disaster_type=_SECONDARY.get(code) or classify_type(name),
+        recs.append(PublicInfoRec(
+            info_type=INFO_WARNING,
+            category=_SECONDARY.get(code) or classify_type(name),
+            agency="香港天文台",
+            severity=w.get("type") or w.get("actionCode") or None,
+            title=str(name)[:400],
             event_time=ts,
             lat=HK_LAT, lon=HK_LON,
             description=f"[香港天文台] {name} ({w.get('actionCode','')})".strip()[:800],
@@ -91,17 +98,17 @@ def parse_warnings(warnsum: dict) -> list[DisasterRec]:
     return recs
 
 
-def collect(emit=lambda m: None) -> list[DisasterRec]:
+def collect(emit=lambda m: None) -> list[PublicInfoRec]:
     warnsum = fetch_warnings(emit=emit)
     recs = parse_warnings(warnsum)
-    emit(f"  香港天文台: {len(warnsum)} signals -> {len(recs)} secondary-hazard records")
+    emit(f"  香港天文台: {len(warnsum)} signals -> {len(recs)} public-info (warning) records")
     return recs
 
 
 def _preview() -> None:
     recs = collect(emit=lambda m: print(f"[hko]{m}"))
     for r in recs:
-        print(f"  {r.disaster_type:12s} {r.event_time} | {r.description[:70]}")
+        print(f"  {r.info_type:8s} {r.category or '':12s} {r.event_time} | {r.description[:60]}")
     if not recs:
         print("  (no active secondary-hazard warnings right now)")
 

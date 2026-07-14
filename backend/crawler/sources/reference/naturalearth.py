@@ -14,7 +14,7 @@ GDAL. Two layers:
 
 Only West-Pacific-rim countries are kept (attribute filter on ISO code), so the
 table stays small. Offline test:
-    python -m crawler.sources.naturalearth --preview
+    python -m crawler.sources.reference.naturalearth --preview
 """
 from __future__ import annotations
 
@@ -27,7 +27,9 @@ from dataclasses import dataclass
 import httpx
 from shapely.geometry import MultiPolygon, shape
 
-_BACKEND = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+_BACKEND = os.path.dirname(os.path.abspath(__file__))
+while os.path.basename(_BACKEND) != "backend" and os.path.dirname(_BACKEND) != _BACKEND:
+    _BACKEND = os.path.dirname(_BACKEND)
 if _BACKEND not in sys.path:
     sys.path.insert(0, _BACKEND)
 
@@ -36,7 +38,7 @@ _RAW = "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/ge
 ADMIN0_URL = f"{_RAW}/ne_10m_admin_0_countries.geojson"
 ADMIN1_URL = f"{_RAW}/ne_10m_admin_1_states_provinces.geojson"
 
-CACHE_DIR = os.path.join(os.path.dirname(__file__), "..", ".cache")
+CACHE_DIR = os.path.join(_BACKEND, "crawler", ".cache")
 
 # West-Pacific-rim countries whose coasts our typhoons strike. ISO A2 codes.
 WP_ISO2 = {

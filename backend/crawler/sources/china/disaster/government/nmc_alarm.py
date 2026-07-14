@@ -1,17 +1,18 @@
 """CMA 中央气象台 预警 (nmc.cn) — official Chinese meteorological warnings.
 
-The NMC (same authority as the typhoon.nmc.cn live-track feed already used) also
-publishes real-time 预警信号 for the secondary hazards a typhoon spawns inland:
-暴雨 (heavy rain / flooding), 地质灾害气象风险 (landslide risk), 风暴潮 (storm
-surge), 大风 (gale). These warnings are region + time stamped but DON'T name the
-storm, so the loader ties each to whichever typhoon was active there & then
-(time/space match).
+These are 公共情报 (public information the authority *announces*), NOT 受灾情报
+(damage that occurred): the NMC publishes real-time 预警信号 for the secondary
+hazards a typhoon spawns inland — 暴雨 (heavy rain / flooding), 地质灾害气象风险
+(landslide risk), 风暴潮 (storm surge), 大风 (gale). Each becomes a PublicInfoRec
+(info_type=warning). They are region + time stamped but DON'T name the storm, so
+the loader ties each to whichever typhoon was active there & then (time/space
+match).
 
   http://www.nmc.cn/rest/findAlarm  -> current national warning list (JSON)
 
 This is a real-time feed (current warnings only), matching the live nature of the
 CMA/JMA/JTWC track sources. Offline test:
-  python crawler/sources/nmc_alarm.py --preview
+  python crawler/sources/china/disaster/government/nmc_alarm.py --preview
 """
 from __future__ import annotations
 
@@ -22,11 +23,14 @@ from datetime import datetime, timezone
 
 import httpx
 
-_BACKEND = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+_BACKEND = os.path.dirname(os.path.abspath(__file__))
+while os.path.basename(_BACKEND) != "backend" and os.path.dirname(_BACKEND) != _BACKEND:
+    _BACKEND = os.path.dirname(_BACKEND)
 if _BACKEND not in sys.path:
     sys.path.insert(0, _BACKEND)
 
-from crawler.sources.disaster_common import DisasterRec, classify_type  # noqa: E402
+from crawler.sources._shared.disaster_common import classify_type  # noqa: E402
+from crawler.sources._shared.public_common import INFO_WARNING, PublicInfoRec  # noqa: E402
 
 ALARM_URL = "http://www.nmc.cn/rest/findAlarm"
 _H = {"User-Agent": "Mozilla/5.0", "Referer": "http://www.nmc.cn/"}
@@ -124,8 +128,8 @@ def _pick(row: dict, *keys):
     return None
 
 
-def parse_alarms(rows: list[dict]) -> list[DisasterRec]:
-    recs: list[DisasterRec] = []
+def parse_alarms(rows: list[dict]) -> list[PublicInfoRec]:
+    recs: list[PublicInfoRec] = []
     for row in rows:
         # Hazard type is embedded in the title (e.g. "…发布暴雨黄色预警信号");
         # there is no separate signaltype field in the current feed.
@@ -139,8 +143,12 @@ def parse_alarms(rows: list[dict]) -> list[DisasterRec]:
         url = _pick(row, "url", "link")
         if url and str(url).startswith("/"):
             url = "http://www.nmc.cn" + url
-        recs.append(DisasterRec(
-            disaster_type=classify_type(f"{signal} {title}"),
+        recs.append(PublicInfoRec(
+            info_type=INFO_WARNING,
+            category=classify_type(f"{signal} {title}"),
+            agency="中央气象台",
+            severity=str(level) or None,
+            title=title[:400] or None,
             event_time=ts,
             lat=lat, lon=lon,
             description=f"[中央气象台预警] {level} {title}".strip()[:800],
@@ -151,18 +159,18 @@ def parse_alarms(rows: list[dict]) -> list[DisasterRec]:
     return recs
 
 
-def collect(emit=lambda m: None) -> list[DisasterRec]:
+def collect(emit=lambda m: None) -> list[PublicInfoRec]:
     rows = fetch_alarms(emit=emit)
     recs = parse_alarms(rows)
-    emit(f"  NMC 预警: {len(rows)} alarms -> {len(recs)} secondary-hazard records")
+    emit(f"  NMC 预警: {len(rows)} alarms -> {len(recs)} public-info (warning) records")
     return recs
 
 
 def _preview() -> None:
     recs = collect(emit=lambda m: print(f"[nmc_alarm]{m}"))
     for r in recs[:15]:
-        print(f"  {r.disaster_type:14s} {r.region_name or '(?)':10s} "
-              f"{r.event_time} | {r.description[:60]}")
+        print(f"  {r.info_type:8s} {r.category or '':10s} {r.region_name or '(?)':10s} "
+              f"{r.event_time} | {r.description[:50]}")
 
 
 if __name__ == "__main__":

@@ -8,7 +8,7 @@ feed for a curated set of typhoon-exposed prefectures and record any active
 time/space-matches it to the responsible typhoon.
 
 Same bosai infrastructure as the JMA track source (jma.py). Real-time (current
-warnings only). Offline test:  python crawler/sources/jma_warning.py --preview
+warnings only). Offline test:  python crawler/sources/japan/disaster/government/jma_warning.py --preview
 """
 from __future__ import annotations
 
@@ -19,11 +19,14 @@ from datetime import datetime
 
 import httpx
 
-_BACKEND = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+_BACKEND = os.path.dirname(os.path.abspath(__file__))
+while os.path.basename(_BACKEND) != "backend" and os.path.dirname(_BACKEND) != _BACKEND:
+    _BACKEND = os.path.dirname(_BACKEND)
 if _BACKEND not in sys.path:
     sys.path.insert(0, _BACKEND)
 
-from crawler.sources.disaster_common import DisasterRec, classify_type  # noqa: E402
+from crawler.sources._shared.disaster_common import classify_type  # noqa: E402
+from crawler.sources._shared.public_common import INFO_WARNING, PublicInfoRec  # noqa: E402
 
 WARN_URL = "https://www.jma.go.jp/bosai/warning/data/warning/{office}.json"
 _H = {"User-Agent": "Mozilla/5.0"}
@@ -83,7 +86,7 @@ def _active_codes(data: dict) -> set[str]:
     return out
 
 
-def parse_office(office: str, data: dict) -> list[DisasterRec]:
+def parse_office(office: str, data: dict) -> list[PublicInfoRec]:
     name, lat, lon = PREFECTURES[office]
     ts = _parse_dt(data.get("reportDatetime"))
     headline = data.get("headlineText") or ""
@@ -98,10 +101,14 @@ def parse_office(office: str, data: dict) -> list[DisasterRec]:
     if ht in _SECONDARY_TYPES:
         hazards.setdefault(ht, "気象警報")
 
-    recs: list[DisasterRec] = []
+    recs: list[PublicInfoRec] = []
     for typ, label in hazards.items():
-        recs.append(DisasterRec(
-            disaster_type=typ,
+        recs.append(PublicInfoRec(
+            info_type=INFO_WARNING,
+            category=typ,
+            agency="気象庁",
+            severity="特別警報" if "特別警報" in headline else "警報",
+            title=label,
             event_time=ts,
             lat=lat, lon=lon,
             description=f"[気象庁 {name}] {label}"
@@ -113,8 +120,8 @@ def parse_office(office: str, data: dict) -> list[DisasterRec]:
     return recs
 
 
-def collect(emit=lambda m: None) -> list[DisasterRec]:
-    recs: list[DisasterRec] = []
+def collect(emit=lambda m: None) -> list[PublicInfoRec]:
+    recs: list[PublicInfoRec] = []
     hit = 0
     for office in PREFECTURES:
         try:
@@ -125,14 +132,14 @@ def collect(emit=lambda m: None) -> list[DisasterRec]:
         got = parse_office(office, data)
         recs += got
         hit += 1
-    emit(f"  気象庁 気象警報: {hit}/{len(PREFECTURES)} prefectures -> {len(recs)} hazard records")
+    emit(f"  気象庁 気象警報: {hit}/{len(PREFECTURES)} prefectures -> {len(recs)} public-info (warning) records")
     return recs
 
 
 def _preview() -> None:
     recs = collect(emit=lambda m: print(f"[jma_warning]{m}"))
     for r in recs:
-        print(f"  {r.disaster_type:12s} {r.region_name} {r.event_time} | {r.description[:70]}")
+        print(f"  {r.category:12s} {r.region_name} {r.event_time} | {r.description[:60]}")
     if not recs:
         print("  (no active 警報-level secondary hazards right now)")
 

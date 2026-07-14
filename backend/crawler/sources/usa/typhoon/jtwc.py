@@ -14,7 +14,7 @@ from datetime import datetime, timezone
 
 import httpx
 
-from crawler.sources.common import AgencyStorm, ObsPoint, num
+from crawler.sources._shared.common import AgencyStorm, ObsPoint, num
 
 RSS_URL = "https://www.metoc.navy.mil/jtwc/rss/jtwc.rss"
 WARN_URL = "https://www.metoc.navy.mil/jtwc/products/wp{num}{yy}web.txt"

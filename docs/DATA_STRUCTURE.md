@@ -10,6 +10,7 @@ erDiagram
   TYPHOON ||--o{ TRACK_POINT : has
   TYPHOON ||--o{ AFFECTED_REGION : has
   TYPHOON ||--o{ SECONDARY_DISASTER : triggers
+  TYPHOON ||--o{ PUBLIC_INFO : announced
   TYPHOON ||--o{ MEDIA_ASSET : has
   TYPHOON ||--o{ TYPHOON_REGION_IMPACT : affects
   TYPHOON ||--o{ LANDFALL : makes
@@ -58,6 +59,20 @@ erDiagram
     string region_name "受影响国家/省(源上报)"
     vector embedding "384维"
   }
+  PUBLIC_INFO {
+    int id PK
+    int typhoon_id FK
+    string info_type "warning|advisory|evacuation|news|bulletin"
+    string category "灾种(flood|wind|storm_surge|...)"
+    string agency "发布机构(気象庁/香港天文台/中央气象台/应急管理部/GDACS)"
+    string severity "警报级别(警報/蓝黄橙红/Signal-8...原文)"
+    text title
+    text body
+    geometry geom "POINT/4326"
+    datetime publish_time "发布时间"
+    string region_name
+    vector embedding "384维"
+  }
   MEDIA_ASSET {
     int id PK
     int typhoon_id FK
@@ -98,6 +113,31 @@ erDiagram
     geometry geom "POINT/4326"
   }
 ```
+
+## 情报两层：受灾情报 vs 公共情报 (Damage vs Public Information)
+
+台风相关的非结构文本情报按**语义角色**分成两张对等的知识单元表，各自带
+PostGIS 几何 + pgvector 向量，都通过 `intl_id → 名称 → 时空邻近` 三级匹配挂到台风下
+（`backend/crawler/load.py`）：
+
+| 表 | 语义 | 来源 (`source`) | 载入函数 |
+|---|---|---|---|
+| `secondary_disaster` | **受灾情报** — *已发生的损失*（死伤 / 经济损失 / 洪涝·滑坡·风暴潮事件） | GDACS 事件、应急管理部灾情通报(MEM)、消防庁被害報(FDMA)、ReliefWeb | `load_disasters` |
+| `public_info` | **公共情报** — *当局公开发布的信息*（预警·警报 / 避难·应急响应 / 报道） | 中央气象台预警(NMC)、香港天文台(HKO)、気象庁警報(JMA)、应急管理部应急响应、GDACS 报道 | `load_public_info` |
+
+区分原则：**已发生的损失**入 `secondary_disaster`（`disaster_type`），**当局发布的信息**
+入 `public_info`（`info_type` = warning/advisory/evacuation/news/bulletin）。同一机构可能
+同时供给两层——例如 GDACS 的**事件**是受灾情报、其**报道页**是公共情报；应急管理部的
+**灾情通报**是受灾情报、**应急响应公告**是公共情报。
+
+> 检索：`/search/semantic` 现同时对台风 / 受灾情报 / 公共情报做 pgvector Top-K；
+> `/public-info` 提供属性 + 时空(bbox/time)选择，`/typhoons/{id}/public-info` 按台风取。
+> 已离线验证跨语言语义一致性：英文查询 "severe flooding and heavy rain warning"
+> 命中中文「暴雨预警信号」余弦距离 ≈ **0.33**。
+
+> 注意 pgvector 陷阱：IVFFlat 索引若在空表上由 `create_all` 建立会退化（查询返回 0 行），
+> 故 `crawler/embed.py` 在每次向量回填后 `REINDEX` 三个向量索引；语义查询设
+> `ivfflat.probes=10` 以保召回。
 
 ## 地理影响层 (Geographic Impact — 新增)
 

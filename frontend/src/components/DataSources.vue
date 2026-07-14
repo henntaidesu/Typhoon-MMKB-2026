@@ -45,7 +45,24 @@
           <span v-for="(v, k) in s.state.counts" :key="k">{{ k }}: <b>{{ v }}</b></span>
         </div>
 
+        <div v-if="s.temporal" class="actions">
+          <button
+            class="go new"
+            :disabled="busy || s.state?.status === 'running'"
+            @click="start(s, 'new')"
+          >
+            {{ s.state?.status === 'running' ? t('sources.crawling') : t('sources.fetchNew') }}
+          </button>
+          <button
+            class="go hist"
+            :disabled="busy || s.state?.status === 'running'"
+            @click="start(s, 'history')"
+          >
+            {{ s.state?.status === 'running' ? t('sources.crawling') : t('sources.fetchHistory') }}
+          </button>
+        </div>
         <button
+          v-else
           class="go"
           :disabled="busy || s.state?.status === 'running'"
           @click="start(s)"
@@ -155,11 +172,12 @@ async function startUpdate() {
   }
 }
 
-async function start(s) {
+async function start(s, mode) {
   const body = {}
   const f = form[s.key] || {}
   if ('variant' in f) body.variant = f.variant
   if ('years' in f) body.years = parseYears(f.years)
+  if (mode) body.mode = mode      // 'new' | 'history' for temporal sources
   try {
     const res = await api.startCrawl(s.key, body)
     s.state = { status: 'running', message: t('sources.starting'), counts: {} }
@@ -225,4 +243,11 @@ onUnmounted(() => clearInterval(timer))
 }
 .go:hover:not(:disabled) { background: #095aad; }
 .go:disabled { background: #b7c3d2; cursor: not-allowed; }
+
+.actions { margin-top: auto; display: flex; gap: 8px; }
+.actions .go { margin-top: 0; flex: 1; }
+/* New (current-season) is the primary action; history is the secondary backfill. */
+.actions .go.hist { background: #eef2f7; color: #45536a; border: 1px solid #d3dae4; }
+.actions .go.hist:hover:not(:disabled) { background: #e2e8f0; color: #2b3648; }
+.actions .go.hist:disabled { background: #f1f4f8; color: #a2adbb; }
 </style>

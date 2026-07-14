@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from routers import search, sources, stats, typhoons
+from routers import public_info, search, sources, stats, typhoons
 
 log = logging.getLogger("mmkb.startup")
 
@@ -53,6 +53,7 @@ app.include_router(typhoons.router)
 app.include_router(search.router)
 app.include_router(sources.router)
 app.include_router(stats.router)
+app.include_router(public_info.router)
 
 
 @app.get("/")

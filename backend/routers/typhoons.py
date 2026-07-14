@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from db import get_session
 from models import (
-    AdminRegion, AffectedRegion, Landfall, SecondaryDisaster, Typhoon,
+    AdminRegion, AffectedRegion, Landfall, PublicInfo, SecondaryDisaster, Typhoon,
     TrackPoint, TyphoonRegionImpact,
 )
 from schemas import TyphoonBrief
@@ -112,6 +112,40 @@ def get_disasters(tid: int, session: Session = Depends(get_session)):
             },
         })
     return {"type": "FeatureCollection", "features": feats}
+
+
+@router.get("/{tid}/public-info")
+def get_public_info(
+    tid: int,
+    session: Session = Depends(get_session),
+    info_type: str | None = Query(None, description="warning|advisory|evacuation|news|bulletin"),
+):
+    """公共情报 (warnings / advisories / evacuation / news) about this typhoon,
+    as a GeoJSON FeatureCollection. Records without a location are returned in a
+    separate `unlocated` list so the UI can still list them."""
+    stmt = select(PublicInfo).where(PublicInfo.typhoon_id == tid)
+    if info_type:
+        stmt = stmt.where(PublicInfo.info_type == info_type)
+    stmt = stmt.order_by(PublicInfo.publish_time)
+    rows = session.scalars(stmt).all()
+    feats, unlocated = [], []
+    for p in rows:
+        props = {
+            "id": p.id, "info_type": p.info_type, "category": p.category,
+            "agency": p.agency, "severity": p.severity, "title": p.title,
+            "body": p.body, "region_name": p.region_name,
+            "publish_time": p.publish_time.isoformat() if p.publish_time else None,
+            "source": p.source, "source_url": p.source_url,
+        }
+        if p.lon is None or p.lat is None:
+            unlocated.append(props)
+            continue
+        feats.append({
+            "type": "Feature",
+            "geometry": {"type": "Point", "coordinates": [p.lon, p.lat]},
+            "properties": props,
+        })
+    return {"type": "FeatureCollection", "features": feats, "unlocated": unlocated}
 
 
 @router.get("/{tid}/affected-regions")

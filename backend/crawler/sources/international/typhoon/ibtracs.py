@@ -6,7 +6,7 @@ records, derives a coarse affected-region polygon from the track, and upserts
 everything into the knowledge base.
 
 The parsing is separated from DB loading so it can be validated offline:
-    python -m crawler.sources.ibtracs --preview
+    python -m crawler.sources.international.typhoon.ibtracs --preview
 """
 from __future__ import annotations
 
@@ -22,7 +22,9 @@ import httpx
 import pandas as pd
 
 # Make backend/ importable (config + ORM models live there, single source).
-_BACKEND = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+_BACKEND = os.path.dirname(os.path.abspath(__file__))
+while os.path.basename(_BACKEND) != "backend" and os.path.dirname(_BACKEND) != _BACKEND:
+    _BACKEND = os.path.dirname(_BACKEND)
 if _BACKEND not in sys.path:
     sys.path.insert(0, _BACKEND)
 
@@ -33,7 +35,7 @@ IBTRACS_URLS = {
     "since1980": "https://www.ncei.noaa.gov/data/international-best-track-archive-for-climate-stewardship-ibtracs/v04r01/access/csv/ibtracs.since1980.list.v04r01.csv",
 }
 
-CACHE_DIR = os.path.join(os.path.dirname(__file__), "..", ".cache")
+CACHE_DIR = os.path.join(_BACKEND, "crawler", ".cache")
 
 # Columns we care about (IBTrACS has ~170). Row 0 of the CSV body is a units row.
 USECOLS = [

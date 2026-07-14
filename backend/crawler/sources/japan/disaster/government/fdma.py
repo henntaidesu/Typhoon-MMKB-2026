@@ -11,7 +11,7 @@ Bodies are mostly PDFs, so impact figures are mined from the HTML index titles
 (best-effort); the report link is preserved for reference. Degrades to an empty
 list on layout change (pipeline wraps it in try/except).
 
-Offline test:  python crawler/sources/fdma.py --preview
+Offline test:  python crawler/sources/japan/disaster/government/fdma.py --preview
 """
 from __future__ import annotations
 
@@ -23,11 +23,13 @@ from datetime import datetime, timezone
 
 import httpx
 
-_BACKEND = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+_BACKEND = os.path.dirname(os.path.abspath(__file__))
+while os.path.basename(_BACKEND) != "backend" and os.path.dirname(_BACKEND) != _BACKEND:
+    _BACKEND = os.path.dirname(_BACKEND)
 if _BACKEND not in sys.path:
     sys.path.insert(0, _BACKEND)
 
-from crawler.sources.disaster_common import (  # noqa: E402
+from crawler.sources._shared.disaster_common import (  # noqa: E402
     DisasterRec, classify_type, extract_casualties,
 )
 

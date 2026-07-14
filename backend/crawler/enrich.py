@@ -6,7 +6,7 @@ same pattern as load._rebuild_region_from_points):
   - typhoon_region_impact : one row per (typhoon, admin_region) it affected
   - landfall              : one row per discrete sea→land crossing
 
-Requires admin_region to be loaded first (crawler/sources/naturalearth.py +
+Requires admin_region to be loaded first (crawler/sources/reference/naturalearth.py +
 load.load_admin_regions). Run standalone:
     python crawler/enrich.py            # incremental (skip already-enriched)
     python crawler/enrich.py --force    # recompute all

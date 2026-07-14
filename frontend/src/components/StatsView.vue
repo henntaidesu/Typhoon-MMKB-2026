@@ -36,10 +36,25 @@
             <div class="tp-sub">
               {{ t('stats.relatedTyphoons') }}:
               <b>{{ selected.typhoon_count }}</b>
-              <span class="tp-showing">{{ t('stats.showingOf', { shown: features.length, total: selected.typhoon_count }) }}</span>
+              <span class="tp-showing">{{ t('stats.showingOf', { shown: displayFeatures.length, total: filteredFeatures.length }) }}</span>
             </div>
+
+            <!-- 筛选：年份 / 强度 / 仅登陆 -->
+            <div class="tp-filters">
+              <select v-model="filterYear" class="tp-sel">
+                <option value="">{{ t('stats.allYears') }}</option>
+                <option v-for="y in availableYears" :key="y" :value="y">{{ y }}</option>
+              </select>
+              <select v-model.number="filterMinKt" class="tp-sel">
+                <option v-for="o in intensityOptions" :key="o.kt" :value="o.kt">{{ o.label }}</option>
+              </select>
+              <button class="tp-lf" :class="{ on: landfallOnly }" @click="landfallOnly = !landfallOnly">
+                {{ t('stats.landfallOnly') }}
+              </button>
+            </div>
+
             <ul class="tp-list">
-              <li v-for="f in features" :key="f.properties.typhoon_id"
+              <li v-for="f in displayFeatures" :key="f.properties.typhoon_id"
                   :class="{ on: hoverId === f.properties.typhoon_id }"
                   @mouseenter="highlight(f.properties.typhoon_id)"
                   @mouseleave="highlight(null)">
@@ -48,7 +63,12 @@
                 <span class="yr">{{ f.properties.season_year }}</span>
                 <span class="wd">{{ f.properties.max_wind_kt ?? '?' }}kt</span>
               </li>
+              <li v-if="!filteredFeatures.length" class="tp-empty">{{ t('stats.noData') }}</li>
             </ul>
+
+            <button v-if="filteredFeatures.length > DEFAULT_SHOWN" class="tp-more" @click="showAll = !showAll">
+              {{ showAll ? t('stats.showLess') : t('stats.showAll', { n: filteredFeatures.length }) }}
+            </button>
           </div>
         </div>
 
@@ -76,7 +96,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, onUnmounted, nextTick, watch } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import L from 'leaflet'
 import api from '../api/client'
@@ -92,10 +112,47 @@ const typeBars = ref([])
 const level = ref(0)
 const maxCount = ref(0)
 
-const selected = ref(null)   // { region_id, region_name, parent_name, typhoon_count }
-const features = ref([])     // related typhoon track features
+const selected = ref(null)     // { region_id, region_name, parent_name, typhoon_count }
+const selectedId = ref(null)   // currently selected admin_region id (for re-fetch)
+const allFeatures = ref([])    // every related typhoon track returned by the API
 const hoverId = ref(null)
 const activeRegionId = ref(null)
+
+// --- 相关台风面板的筛选状态 ---
+const DEFAULT_SHOWN = 5        // 默认展示最新的 5 条
+const filterYear = ref('')     // '' = 全部年份
+const filterMinKt = ref(0)     // 0 = 全部强度；否则为最小 max_wind_kt 阈值
+const landfallOnly = ref(false)
+const showAll = ref(false)
+
+// Saffir-Simpson-ish minimum-intensity thresholds for the dropdown.
+const intensityOptions = computed(() => [
+  { kt: 0, label: t('stats.allIntensity') },
+  { kt: 34, label: '≥ TS' },
+  { kt: 64, label: '≥ Cat1' },
+  { kt: 96, label: '≥ Cat3' },
+  { kt: 113, label: '≥ Cat4' },
+])
+
+// Years present in the current region's storms, newest first (drives the dropdown).
+const availableYears = computed(() => {
+  const ys = new Set()
+  for (const f of allFeatures.value) {
+    if (f.properties.season_year != null) ys.add(f.properties.season_year)
+  }
+  return [...ys].sort((a, b) => b - a)
+})
+
+// API already returns tracks sorted year-desc, so slicing keeps "the latest N".
+const filteredFeatures = computed(() => allFeatures.value.filter((f) => {
+  const p = f.properties
+  if (filterYear.value !== '' && p.season_year !== filterYear.value) return false
+  if (filterMinKt.value && (p.max_wind_kt == null || p.max_wind_kt < filterMinKt.value)) return false
+  return true
+}))
+
+const displayFeatures = computed(() =>
+  showAll.value ? filteredFeatures.value : filteredFeatures.value.slice(0, DEFAULT_SHOWN))
 
 const mapEl = ref(null)
 let map = null
@@ -171,22 +228,33 @@ function choroStyle(f) {
   }
 }
 
+// Fetch the region's storms; landfall_only is the only server-side filter
+// (year/intensity are applied client-side for instant response).
+async function fetchTracks(fallbackName) {
+  const fc = await api.regionTracks(selectedId.value, { landfall_only: landfallOnly.value })
+  allFeatures.value = fc.features
+  selected.value = { ...fc.properties, region_name: fc.properties.region_name || fallbackName }
+}
+
 async function selectRegion(regionId, name) {
   if (regionId == null) return
+  selectedId.value = regionId
+  activeRegionId.value = regionId
+  // Reset filters so a fresh region defaults to "latest 5, all intensities".
+  filterYear.value = ''
+  filterMinKt.value = 0
+  landfallOnly.value = false
+  showAll.value = false
   try {
-    const fc = await api.regionTracks(regionId, {})
-    features.value = fc.features
-    selected.value = { ...fc.properties, region_name: fc.properties.region_name || name }
-    activeRegionId.value = regionId
-    drawTracks()
+    await fetchTracks(name)
     if (choroLayer) choroLayer.setStyle(choroStyle)
   } catch (e) { err.value = String(e.message || e) }
 }
 
 function drawTracks() {
   if (tracksLayer) { map.removeLayer(tracksLayer); tracksLayer = null }
-  if (!features.value.length) return
-  tracksLayer = L.geoJSON({ type: 'FeatureCollection', features: features.value }, {
+  if (!displayFeatures.value.length) return
+  tracksLayer = L.geoJSON({ type: 'FeatureCollection', features: displayFeatures.value }, {
     style: (f) => ({ color: windColor(f.properties.max_wind_kt), weight: 2, opacity: 0.55 }),
     onEachFeature: (f, layer) => {
       layer._tid = f.properties.typhoon_id
@@ -212,11 +280,24 @@ function highlight(tid) {
 
 function clearSelection() {
   selected.value = null
-  features.value = []
+  selectedId.value = null
+  allFeatures.value = []
   activeRegionId.value = null
   if (tracksLayer) { map.removeLayer(tracksLayer); tracksLayer = null }
   if (choroLayer) choroLayer.setStyle(choroStyle)
 }
+
+// Redraw whenever the visible subset changes (region select, year/intensity
+// filter, or show-more toggle). fitBounds re-frames the map to the matches.
+watch(displayFeatures, () => drawTracks())
+
+// Landfall-only is server-side, so re-fetch; keep year/intensity filters intact.
+watch(landfallOnly, async () => {
+  if (selectedId.value == null) return
+  showAll.value = false
+  try { await fetchTracks(selected.value?.region_name) }
+  catch (e) { err.value = String(e.message || e) }
+})
 
 function onBar(item) { selectRegion(item.id, item.label) }
 
@@ -269,10 +350,20 @@ onUnmounted(() => { if (map) { map.remove(); map = null } })
 .hint { margin-top: 6px; font-size: 12px; color: #98a4b3; }
 
 .track-panel {
-  position: absolute; top: 10px; right: 10px; width: 220px; max-height: 420px;
+  position: absolute; top: 10px; right: 10px; width: 244px; max-height: 420px;
   background: rgba(255,255,255,.97); border: 1px solid #dde3ea; border-radius: 10px;
   box-shadow: 0 4px 16px rgba(16,34,60,.18); z-index: 500; display: flex; flex-direction: column;
 }
+.tp-filters { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px 12px; border-bottom: 1px solid #eef1f5; }
+.tp-sel { flex: 1 1 88px; min-width: 0; font-size: 12px; color: #445167; padding: 3px 6px;
+  border: 1px solid #d3dae4; border-radius: 6px; background: #fff; }
+.tp-lf { flex: 0 0 auto; font-size: 12px; padding: 3px 10px; border: 1px solid #d3dae4;
+  border-radius: 6px; background: #fff; color: #445167; cursor: pointer; }
+.tp-lf.on { background: #0b6bcb; color: #fff; border-color: #0b6bcb; }
+.tp-empty { justify-content: center; color: #98a4b3; font-size: 12px; padding: 10px 6px; }
+.tp-more { margin: 6px 10px 10px; padding: 5px 0; font-size: 12px; color: #0b6bcb;
+  background: #f2f7fd; border: 1px solid #d5e6f7; border-radius: 6px; cursor: pointer; }
+.tp-more:hover { background: #e7f1fb; }
 .tp-head { display: flex; justify-content: space-between; align-items: center; padding: 10px 12px 4px; }
 .tp-title { font-size: 14px; font-weight: 700; color: #0b2540; }
 .tp-parent { color: #98a4b3; font-weight: 400; font-size: 12px; }

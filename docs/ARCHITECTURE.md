@@ -6,19 +6,22 @@
 flowchart TB
   subgraph SRC["分散数据源 (Distributed Source-Nodes)"]
     A1["IBTrACS (NOAA)<br/>西太平洋 best track"]
-    A2["GDACS (UN/EC)<br/>热带气旋灾害事件"]
+    A2["GDACS (UN/EC)<br/>热带气旋灾害事件 + 报道"]
     A3["Digital Typhoon (NII)<br/>卫星影像 + 灾情"]
     A4["Natural Earth<br/>国家/省 行政边界"]
     A5["GADM 4.1<br/>地级市 (admin-2)"]
+    A6["受灾情报: 应急管理部灾情/消防庁/ReliefWeb"]
+    A7["公共情报: 中央气象台预警/香港天文台/気象庁警報/应急响应"]
   end
 
   subgraph CRW["爬虫 / 元数据统合 (backend/crawler/)"]
     B1["ibtracs.py"]
-    B2["gdacs.py"]
+    B2["gdacs.py 事件+报道"]
     B3["digital_typhoon.py"]
     B4["embed.py<br/>多语言向量化"]
     B6["naturalearth.py / gadm.py<br/>行政边界(含地级市)"]
     B7["enrich.py<br/>地理影响派生"]
+    B8["load_disasters / load_public_info<br/>三级匹配挂到台风"]
     B5["pipeline.py 编排"]
   end
 
@@ -26,7 +29,8 @@ flowchart TB
     D1["typhoon (含 embedding)"]
     D2["track_point<br/>PostGIS geom (时空间核心)"]
     D3["affected_region 多边形"]
-    D4["secondary_disaster<br/>PostGIS geom + embedding"]
+    D4["secondary_disaster 受灾情报<br/>PostGIS geom + embedding"]
+    D8["public_info 公共情报<br/>PostGIS geom + embedding"]
     D5["media_asset 多媒体元数据"]
     D6["admin_region 行政边界<br/>国家/省/地级市"]
     D7["typhoon_region_impact / landfall<br/>地理影响事实"]
@@ -36,10 +40,11 @@ flowchart TB
   subgraph API["后端 FastAPI (backend/)"]
     E1["属性查询 /typhoons"]
     E2["时空间查询 /search/spatiotemporal"]
-    E3["语义查询 /search/semantic"]
+    E3["语义查询 /search/semantic<br/>(台风+受灾情报+公共情报)"]
     E4["结合查询 /search/hybrid"]
     E5["GeoJSON 轨迹/灾害/影响区/登陆"]
     E6["地理影响聚合 /stats/*"]
+    E7["公共情报 /public-info<br/>/typhoons/{id}/public-info"]
   end
 
   subgraph UI["前端 Vue3 + Leaflet (frontend/)"]
@@ -55,6 +60,9 @@ flowchart TB
   A3-->B3-->B5
   A4-->B6-->B5
   A5-->B6
+  A6-->B8
+  A7-->B8
+  B8-->B5
   B5-->B4
   B5-->B7
   B5-->DB

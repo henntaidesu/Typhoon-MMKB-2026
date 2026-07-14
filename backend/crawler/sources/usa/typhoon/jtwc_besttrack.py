@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 
 import httpx
 
-from crawler.sources.common import AgencyStorm, ObsPoint, num, strongest_grade
+from crawler.sources._shared.common import AgencyStorm, ObsPoint, num, strongest_grade
 
 ZIP_URL = "https://www.metoc.navy.mil/jtwc/products/best-tracks/{y}/{y}s-bwp/bwp{y}.zip"
 EARLIEST_YEAR = 1945

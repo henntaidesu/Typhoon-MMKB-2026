@@ -64,6 +64,9 @@ class Typhoon(Base):
     disasters: Mapped[list["SecondaryDisaster"]] = relationship(
         back_populates="typhoon", cascade="all, delete-orphan"
     )
+    public_infos: Mapped[list["PublicInfo"]] = relationship(
+        back_populates="typhoon", cascade="all, delete-orphan"
+    )
     regions: Mapped[list["AffectedRegion"]] = relationship(
         back_populates="typhoon", cascade="all, delete-orphan"
     )
@@ -184,6 +187,63 @@ class SecondaryDisaster(Base):
     )
 
 
+class PublicInfo(Base):
+    """A piece of *public information* (公共情报) issued about a typhoon —
+    distinct from SecondaryDisaster (受灾情报 = damage that actually occurred).
+
+    Where SecondaryDisaster records what happened (casualties, loss, a flood
+    event), PublicInfo records what authorities *announced to the public*:
+    official warnings/alerts (预警·警报), evacuation & emergency advisories, and
+    news/media reports. Like a disaster it carries its own geometry + embedding,
+    so public information is spatio-temporally and semantically searchable too.
+    """
+
+    __tablename__ = "public_info"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    typhoon_id: Mapped[int] = mapped_column(
+        ForeignKey("typhoon.id", ondelete="CASCADE"), index=True
+    )
+    # What kind of public information this is:
+    #   warning    官方预警/警报 (JMA 警報, HKO signal, NMC 预警)
+    #   advisory   注意报 / lower-level advisory
+    #   evacuation 避难指示 / 避难所开设 / 应急响应
+    #   news       报道 / 社交媒体速报
+    #   bulletin   官方情报公告 (非灾情统计)
+    info_type: Mapped[str] = mapped_column(String(24), index=True)
+    # Hazard subtype it concerns (rain/flood/wind/storm_surge/landslide/…),
+    # reusing the same vocabulary as SecondaryDisaster.disaster_type.
+    category: Mapped[str | None] = mapped_column(String(32), index=True)
+    # Issuing authority (JMA / HKO / NMC / CMA / MEM / a news source shortname).
+    agency: Mapped[str | None] = mapped_column(String(32), index=True)
+    # Warning level as the source phrases it: 注意報/警報/特別警報, 蓝/黄/橙/红,
+    # "Signal No. 8", GDACS orange/red — kept verbatim, not normalized.
+    severity: Mapped[str | None] = mapped_column(String(32))
+    title: Mapped[str | None] = mapped_column(Text)
+    body: Mapped[str | None] = mapped_column(Text)
+    geom: Mapped[object | None] = mapped_column(Geometry("POINT", srid=SRID, spatial_index=False))
+    lat: Mapped[float | None] = mapped_column(Float)
+    lon: Mapped[float | None] = mapped_column(Float)
+    publish_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    region_name: Mapped[str | None] = mapped_column(String(128))
+    source: Mapped[str | None] = mapped_column(String(32))
+    source_url: Mapped[str | None] = mapped_column(Text)
+    embedding: Mapped[list[float] | None] = mapped_column(Vector(EMBEDDING_DIM))
+
+    typhoon: Mapped["Typhoon"] = relationship(back_populates="public_infos")
+
+    __table_args__ = (
+        Index("ix_public_info_geom", "geom", postgresql_using="gist"),
+        Index(
+            "ix_public_info_embedding",
+            "embedding",
+            postgresql_using="ivfflat",
+            postgresql_with={"lists": 100},
+            postgresql_ops={"embedding": "vector_cosine_ops"},
+        ),
+    )
+
+
 class MediaAsset(Base):
     """Multimedia metadata: satellite imagery / photos / maps linked to a typhoon."""
 
@@ -205,8 +265,8 @@ class AdminRegion(Base):
     """Reference administrative boundary (country / province) from Natural Earth.
 
     This is a *reference* table (not owned by any typhoon): the derived impact
-    and landfall facts point into it. Loaded once via crawler/sources/
-    naturalearth.py + load.load_admin_regions."""
+    and landfall facts point into it. Loaded once via
+    crawler/sources/reference/naturalearth.py + load.load_admin_regions."""
 
     __tablename__ = "admin_region"
 

@@ -12,7 +12,7 @@ For China this is exactly the 地级市 the KB needs.
 Data: https://gadm.org — free for academic / non-commercial use (this course
 project qualifies). Per-country GeoJSON zips are small (China L2 ≈ 1.4 MB).
 
-Offline test:  python -m crawler.sources.gadm --preview --countries CHN
+Offline test:  python -m crawler.sources.reference.gadm --preview --countries CHN
 """
 from __future__ import annotations
 
@@ -25,11 +25,13 @@ import zipfile
 
 import httpx
 
-_BACKEND = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+_BACKEND = os.path.dirname(os.path.abspath(__file__))
+while os.path.basename(_BACKEND) != "backend" and os.path.dirname(_BACKEND) != _BACKEND:
+    _BACKEND = os.path.dirname(_BACKEND)
 if _BACKEND not in sys.path:
     sys.path.insert(0, _BACKEND)
 
-from crawler.sources.naturalearth import AdminRec, CACHE_DIR, _to_multipolygon_wkt  # noqa: E402
+from crawler.sources.reference.naturalearth import AdminRec, CACHE_DIR, _to_multipolygon_wkt  # noqa: E402
 
 GADM_URL = "https://geodata.ucdavis.edu/gadm/gadm4.1/json/gadm41_{iso3}_2.json.zip"
 

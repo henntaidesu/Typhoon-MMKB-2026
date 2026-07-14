@@ -17,6 +17,7 @@ router = APIRouter(prefix="/sources", tags=["sources"])
 class CrawlParams(BaseModel):
     variant: str | None = None
     years: list[int] | None = None
+    mode: str | None = None  # 'new' (current season) | 'history' (past seasons); temporal sources only
 
 
 @router.get("")

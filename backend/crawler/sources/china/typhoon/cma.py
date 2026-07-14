@@ -21,7 +21,7 @@ from datetime import datetime, timedelta, timezone
 
 import httpx
 
-from crawler.sources.common import (
+from crawler.sources._shared.common import (
     AgencyStorm, ObsPoint, compass_to_deg, ms_to_kt, num, season_of, strongest_grade,
 )
 

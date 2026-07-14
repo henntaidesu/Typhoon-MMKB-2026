@@ -30,12 +30,17 @@ if _BACKEND not in sys.path:
 # Track sources are the official agencies' ACTUAL (实况) real-time tracks, not
 # post-season best-track. CMA is the authoritative/richest; JMA & JTWC enrich
 # the same typhoon (matched by WMO number) with their own official fixes.
+#
+# `temporal: True` marks a time-series source that supports the 新数据 / 历史数据
+# split — the UI shows two buttons and passes mode="new" (current season only) or
+# mode="history" (all past seasons). See _temporal_scope().
 SOURCES = [
     {
         "key": "cma",
         "name": "中央气象台 · 实况路径",
         "provider": "CMA 中国气象局 (typhoon.nmc.cn)",
         "kind": "台风实况路径",
+        "temporal": True,
         "params": [],
     },
     {
@@ -44,6 +49,7 @@ SOURCES = [
         "provider": "JMA / RSMC 东京",
         "kind": "台风路径(官方)",
         "depends": "cma",
+        "temporal": True,
         "params": [],
     },
     {
@@ -52,6 +58,7 @@ SOURCES = [
         "provider": "JTWC 美国联合台风警报中心",
         "kind": "台风路径(官方)",
         "depends": "cma",
+        "temporal": True,
         "params": [],
     },
     {
@@ -60,10 +67,31 @@ SOURCES = [
         "provider": "GDACS",
         "kind": "次生灾害",
         "depends": "cma",
+        "temporal": True,
         "params": [
-            {"name": "years", "type": "years", "label": "年份(逗号分隔)",
-             "default": "2026"},
+            {"name": "years", "type": "years", "label": "年份(逗号分隔，留空按上方选择)",
+             "default": ""},
         ],
+    },
+    {
+        "key": "disaster_bulletins",
+        "name": "官方灾情通报",
+        "provider": "应急管理部 / 消防庁 / ReliefWeb",
+        "kind": "受灾情报",
+        "depends": "cma",
+        "temporal": True,
+        "params": [
+            {"name": "years", "type": "years", "label": "年份(逗号分隔，留空按上方选择)",
+             "default": ""},
+        ],
+    },
+    {
+        "key": "public_info",
+        "name": "官方预警 / 警报",
+        "provider": "中央气象台 / 香港天文台 / 気象庁",
+        "kind": "公共情报",
+        "depends": "cma",
+        "params": [],
     },
     {
         "key": "naturalearth",
@@ -112,8 +140,37 @@ _state: dict[str, dict] = {
 }
 
 
+# GDACS's tropical-cyclone archive effectively begins in 2003; used as the lower
+# bound for a "历史数据" (history) crawl of that source.
+_GDACS_EARLIEST = 2003
+
+
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _temporal_scope(params: dict, earliest: int) -> list[int] | None:
+    """Resolve a temporal crawl's year scope from its request.
+
+    An explicit ``years`` value always wins. Otherwise ``mode`` decides:
+
+      ``"new"``     -> ``[current year]``               (this season only — fast)
+      ``"history"`` -> ``[earliest .. current year-1]``  (past seasons — backfill)
+      unset/other   -> ``None``                          (all years — legacy full crawl)
+
+    Splitting on the current year keeps 新数据 and 历史数据 non-overlapping: only
+    the 新数据 path touches the still-active current season.
+    """
+    years = params.get("years")
+    if years:
+        return sorted({int(y) for y in years})
+    cur = datetime.now(timezone.utc).year
+    mode = params.get("mode")
+    if mode == "new":
+        return [cur]
+    if mode == "history":
+        return list(range(earliest, cur))
+    return None
 
 
 def _decode(e: Exception) -> str:
@@ -198,13 +255,13 @@ def _run_cma(params: dict, emit) -> dict:
     skipped, so re-running stays cheap (only active ones re-download)."""
     from datetime import datetime, timezone
 
-    from crawler.sources import cma
+    from crawler.sources.china.typhoon import cma
     from crawler import load, embed as embed_mod
 
-    years = params.get("years") or None
     cur_year = datetime.now(timezone.utc).year
-    if years:
-        scope = sorted({int(y) for y in years}, reverse=True)
+    scope_years = _temporal_scope(params, cma.EARLIEST_YEAR)
+    if scope_years is not None:
+        scope = sorted(scope_years, reverse=True)
     else:
         scope = list(range(cur_year, cma.EARLIEST_YEAR - 1, -1))  # all history, newest first
 
@@ -249,7 +306,7 @@ def _run_cma(params: dict, emit) -> dict:
         loaded += 1
 
     emit("生成语义向量 …")
-    a, _ = embed_mod.backfill()
+    a, _, _ = embed_mod.backfill()
 
     total = len(load.cma_status_map())
     emit(f"本次处理 {loaded} 个（刷新 {refresh}，新增历史 {loaded - refresh}）；库内共 {total} 个 CMA 台风。已全部抓取完毕。")
@@ -262,11 +319,11 @@ def _run_jma(params: dict, emit) -> dict:
     Incremental: ended storms already carrying JMA points are skipped."""
     from datetime import datetime, timezone
 
-    from crawler.sources import jma, jma_besttrack
+    from crawler.sources.japan.typhoon import jma, jma_besttrack
     from crawler import load, embed as embed_mod
 
-    years = params.get("years") or None
     cur_year = datetime.now(timezone.utc).year
+    years = _temporal_scope(params, jma_besttrack.EARLIEST_YEAR)
 
     bt = jma_besttrack.fetch_storms(years=years, emit=emit)
     status = load.agency_status_map("JMA")
@@ -279,7 +336,7 @@ def _run_jma(params: dict, emit) -> dict:
         nty += a; npt += b
         emit(f"  已写入 {min(i + 100, len(to_load))}/{len(to_load)} …")
 
-    if not years or cur_year in {int(y) for y in years}:
+    if years is None or cur_year in set(years):
         emit("获取 JMA 当前活跃台风实况 …")
         rt = jma.fetch_storms(emit=emit)
         if rt:
@@ -298,13 +355,13 @@ def _run_jtwc(params: dict, emit) -> dict:
     points are skipped (except the current year)."""
     from datetime import datetime, timezone
 
-    from crawler.sources import jtwc, jtwc_besttrack
+    from crawler.sources.usa.typhoon import jtwc, jtwc_besttrack
     from crawler import load, embed as embed_mod
 
-    years = params.get("years")
     cur_year = datetime.now(timezone.utc).year
-    if years:
-        scope = sorted({int(y) for y in years})
+    years = _temporal_scope(params, jtwc_besttrack.EARLIEST_YEAR)
+    if years is not None:
+        scope = sorted(years)
     else:
         scope = list(range(jtwc_besttrack.EARLIEST_YEAR, cur_year + 1))
 
@@ -331,7 +388,7 @@ def _run_jtwc(params: dict, emit) -> dict:
             nty += a; npt += b
         emit(f"  JTWC {y}: 写入 {len(batch)} 个轨迹")
 
-    if not years or cur_year in scope:
+    if years is None or cur_year in scope:
         emit("获取 JTWC 当前活跃台风定位 …")
         rt = jtwc.fetch_storms(emit=emit)
         if rt:
@@ -345,7 +402,7 @@ def _run_jtwc(params: dict, emit) -> dict:
 
 
 def _run_ibtracs(params: dict, emit) -> dict:
-    from crawler.sources import ibtracs
+    from crawler.sources.international.typhoon import ibtracs
     from crawler import load, embed as embed_mod
 
     variant = params.get("variant") or "last3years"
@@ -357,34 +414,36 @@ def _run_ibtracs(params: dict, emit) -> dict:
     emit(f"解析到 {len(recs)} 个台风，写入数据库 …")
     n = load.load_typhoons(recs)
     emit(f"已写入 {n} 个台风，生成语义向量 …")
-    nt, nd = embed_mod.backfill()
-    emit(f"向量化完成：台风 {nt}，灾害 {nd}")
+    nt, nd, npub = embed_mod.backfill()
+    emit(f"向量化完成：台风 {nt}，灾害 {nd}，公共情报 {npub}")
     return {"台风": n, "新增向量": nt}
 
 
 def _run_gdacs(params: dict, emit) -> dict:
-    from crawler.sources import gdacs
+    from crawler.sources.international.disaster.government import gdacs
     from crawler import load, embed as embed_mod
 
-    years = params.get("years") or [datetime.now(timezone.utc).year]
-    total = 0
+    years = _temporal_scope(params, _GDACS_EARLIEST)
+    if years is None:  # legacy full-crawl default: current year only
+        years = [datetime.now(timezone.utc).year]
+    total = news_total = 0
     for y in years:
         emit(f"获取 GDACS {y} 年热带气旋事件 …")
         feats = gdacs.fetch_tc_events(y)
-        recs = gdacs.parse_events(feats)
-        n = load.load_disasters(recs)
-        total += n
-        emit(f"{y} 年：{len(feats)} 个事件 → 匹配入库 {n} 条")
+        n = load.load_disasters(gdacs.parse_events(feats))          # 受灾情报
+        m = load.load_public_info(gdacs.parse_news(feats))          # 公共情报(报道)
+        total += n; news_total += m
+        emit(f"{y} 年：{len(feats)} 个事件 → 灾害 {n} 条 / 报道 {m} 条")
     emit("生成语义向量 …")
-    nt, nd = embed_mod.backfill()
-    emit(f"向量化完成：灾害 {nd}")
-    return {"灾害": total, "新增向量": nd}
+    nt, nd, npub = embed_mod.backfill()
+    emit(f"向量化完成：灾害 {nd}，公共情报 {npub}")
+    return {"灾害": total, "报道": news_total, "新增向量": nd}
 
 
 def _run_digital_typhoon(params: dict, emit) -> dict:
     from sqlalchemy import select
 
-    from crawler.sources import digital_typhoon
+    from crawler.sources.japan.typhoon import digital_typhoon
     from crawler import load, embed as embed_mod
     from db import SessionLocal
     from models import Typhoon
@@ -406,14 +465,77 @@ def _run_digital_typhoon(params: dict, emit) -> dict:
         except Exception as e:  # noqa: BLE001
             emit(f"{intl_id}：跳过（{e}）")
     emit("生成语义向量 …")
-    nt, nd = embed_mod.backfill()
+    nt, nd, npub = embed_mod.backfill()
     return {"处理": done, "新增向量": nd}
+
+
+def _run_disaster_bulletins(params: dict, emit) -> dict:
+    """受灾情报 (damage that occurred) from the official post-event bulletin
+    sources: 应急管理部 (MEM) 灾情通报, 消防庁 (FDMA) 被害報, ReliefWeb sitreps.
+    Each is best-effort and matched to a KB typhoon by name / time-space."""
+    from crawler.sources.china.disaster.government import mem
+    from crawler.sources.japan.disaster.government import fdma
+    from crawler.sources.international.disaster.civilian import reliefweb
+    from crawler import load, embed as embed_mod
+
+    years = _temporal_scope(params, _GDACS_EARLIEST)
+    if years is None:
+        years = [datetime.now(timezone.utc).year]
+
+    total = 0
+    for label, fn in (
+        ("应急管理部", lambda: mem.collect(emit=emit)),
+        ("消防庁", lambda: fdma.collect(emit=emit)),
+        ("ReliefWeb", lambda: reliefweb.collect(years, emit=emit)),
+    ):
+        try:
+            n = load.load_disasters(fn())
+            total += n
+            emit(f"{label}：匹配入库 {n} 条受灾情报")
+        except Exception as e:  # noqa: BLE001 — one source must not abort the run
+            emit(f"{label}：跳过（{_decode(e)}）")
+
+    emit("生成语义向量 …")
+    _, nd, _ = embed_mod.backfill()
+    emit(f"完成：本次新增受灾情报 {total} 条。")
+    return {"受灾情报": total, "新增向量": nd}
+
+
+def _run_public_info(params: dict, emit) -> dict:
+    """公共情报 (warnings/advisories authorities announce): 中央气象台 预警,
+    香港天文台 警告, 気象庁 気象警報. Real-time feeds — they return rows only
+    while a typhoon-driven hazard is currently in force; matched to whichever
+    storm is active there and then."""
+    from crawler.sources.china.disaster.government import nmc_alarm, hko
+    from crawler.sources.japan.disaster.government import jma_warning
+    from crawler import load, embed as embed_mod
+
+    from crawler.sources.china.disaster.government import mem
+
+    total = 0
+    for label, fn in (
+        ("中央气象台预警", lambda: nmc_alarm.collect(emit=emit)),
+        ("香港天文台", lambda: hko.collect(emit=emit)),
+        ("気象庁警報", lambda: jma_warning.collect(emit=emit)),
+        ("应急管理部响应", lambda: mem.collect_emergency(emit=emit)),
+    ):
+        try:
+            n = load.load_public_info(fn())
+            total += n
+            emit(f"{label}：匹配入库 {n} 条公共情报")
+        except Exception as e:  # noqa: BLE001
+            emit(f"{label}：跳过（{_decode(e)}）")
+
+    emit("生成语义向量 …")
+    _, _, npub = embed_mod.backfill()
+    emit(f"完成：本次新增公共情报 {total} 条。")
+    return {"公共情报": total, "新增向量": npub}
 
 
 def _run_naturalearth(params: dict, emit) -> dict:
     """Load Natural Earth admin-0 countries + admin-1 provinces into the
     reference table (idempotent by ne_id)."""
-    from crawler.sources import naturalearth
+    from crawler.sources.reference import naturalearth
     from crawler import load
 
     emit("下载并解析 Natural Earth 行政边界（国家 + 省/县）…")
@@ -429,7 +551,7 @@ def _run_naturalearth(params: dict, emit) -> dict:
 def _run_gadm(params: dict, emit) -> dict:
     """Load GADM level-2 (prefecture / 地级市) boundaries for the WP landfall
     countries into admin_region (admin_level=2). Idempotent by ne_id."""
-    from crawler.sources import gadm
+    from crawler.sources.reference import gadm
     from crawler import load
 
     emit("下载并解析 GADM 地级市边界（中国 地级市 + 周边国家）…")
@@ -458,7 +580,9 @@ def _run_update(params: dict, emit) -> dict:
     """Fast refresh of only the currently active (进行中) typhoons — re-pulls the
     live CMA track for each active storm plus the current JMA/JTWC realtime fix.
     Does NOT rescan history, so it returns in seconds."""
-    from crawler.sources import cma, jma, jtwc
+    from crawler.sources.china.typhoon import cma
+    from crawler.sources.japan.typhoon import jma
+    from crawler.sources.usa.typhoon import jtwc
     from crawler import load, embed as embed_mod
 
     emit("获取当前活跃台风 …")
@@ -494,6 +618,8 @@ RUNNERS = {
     "jma": _run_jma,
     "jtwc": _run_jtwc,
     "gdacs": _run_gdacs,
+    "disaster_bulletins": _run_disaster_bulletins,
+    "public_info": _run_public_info,
     "naturalearth": _run_naturalearth,
     "gadm": _run_gadm,
     "geo_impact": _run_geo_impact,

@@ -8,7 +8,7 @@ For a given typhoon international id (e.g. '2306' -> Digital Typhoon id
 Digital Typhoon markup changes over time, so extraction is defensive and
 degrades gracefully (returns whatever it can find).
 
-Offline test:  python crawler/sources/digital_typhoon.py --preview --id 2306 --year 2023
+Offline test:  python crawler/sources/japan/typhoon/digital_typhoon.py --preview --id 2306 --year 2023
 """
 from __future__ import annotations
 
@@ -21,7 +21,9 @@ from dataclasses import dataclass
 import httpx
 from bs4 import BeautifulSoup
 
-_BACKEND = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+_BACKEND = os.path.dirname(os.path.abspath(__file__))
+while os.path.basename(_BACKEND) != "backend" and os.path.dirname(_BACKEND) != _BACKEND:
+    _BACKEND = os.path.dirname(_BACKEND)
 if _BACKEND not in sys.path:
     sys.path.insert(0, _BACKEND)
 

@@ -14,7 +14,7 @@ from datetime import datetime
 
 import httpx
 
-from crawler.sources.common import AgencyStorm, ObsPoint, num
+from crawler.sources._shared.common import AgencyStorm, ObsPoint, num
 
 LIST_URL = "https://www.jma.go.jp/bosai/typhoon/data/targetTc.json"
 SPEC_URL = "https://www.jma.go.jp/bosai/typhoon/data/{tc}/specifications.json"

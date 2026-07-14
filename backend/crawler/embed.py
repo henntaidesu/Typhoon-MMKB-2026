@@ -16,15 +16,31 @@ _BACKEND = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if _BACKEND not in sys.path:
     sys.path.insert(0, _BACKEND)
 
-from db import SessionLocal  # noqa: E402
-from models import SecondaryDisaster, Typhoon  # noqa: E402
+from sqlalchemy import text  # noqa: E402
+
+from db import SessionLocal, engine  # noqa: E402
+from models import PublicInfo, SecondaryDisaster, Typhoon  # noqa: E402
 from services.embedding import (  # noqa: E402
-    disaster_summary, embed_many, typhoon_summary,
+    disaster_summary, embed_many, public_info_summary, typhoon_summary,
 )
 
+# IVFFlat indexes created by create_all() on an empty table are degenerate (no
+# centroids → vector queries return 0 rows). Rebuilding them once data exists
+# fixes recall. Cheap for our row counts, so we do it after every backfill.
+_VECTOR_INDEXES = ("ix_typhoon_embedding", "ix_disaster_embedding", "ix_public_info_embedding")
 
-def backfill(batch: int = 64) -> tuple[int, int]:
-    nt = nd = 0
+
+def _reindex_vectors() -> None:
+    for ix in _VECTOR_INDEXES:
+        try:
+            with engine.begin() as c:
+                c.execute(text(f"REINDEX INDEX {ix}"))
+        except Exception as e:  # noqa: BLE001 — best-effort; never abort a load
+            print(f"[embed] reindex {ix} skipped: {e}")
+
+
+def backfill(batch: int = 64) -> tuple[int, int, int]:
+    nt = nd = np = 0
     with SessionLocal() as s:
         typhoons = s.scalars(select(Typhoon).where(Typhoon.embedding.is_(None))).all()
         for i in range(0, len(typhoons), batch):
@@ -47,9 +63,23 @@ def backfill(batch: int = 64) -> tuple[int, int]:
                 d.embedding = v
                 nd += 1
             s.commit()
-    return nt, nd
+
+        infos = s.scalars(
+            select(PublicInfo).where(PublicInfo.embedding.is_(None))
+        ).all()
+        for i in range(0, len(infos), batch):
+            chunk = infos[i:i + batch]
+            vecs = embed_many([public_info_summary(p) for p in chunk])
+            for p, v in zip(chunk, vecs):
+                p.embedding = v
+                np += 1
+            s.commit()
+
+    if nt or nd or np:
+        _reindex_vectors()  # keep IVFFlat indexes healthy after new vectors
+    return nt, nd, np
 
 
 if __name__ == "__main__":
-    nt, nd = backfill()
-    print(f"[embed] embedded {nt} typhoons, {nd} disasters")
+    nt, nd, np_ = backfill()
+    print(f"[embed] embedded {nt} typhoons, {nd} disasters, {np_} public-info")

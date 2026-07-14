@@ -68,4 +68,19 @@ def disaster_summary(d) -> str:
     return " ".join(p for p in parts if p)
 
 
+def public_info_summary(p) -> str:
+    """Readable description of a piece of public information (公共情报) for
+    embedding — the announcement's kind, hazard, authority and text."""
+    parts = [
+        f"Public {p.info_type} issued about the typhoon.",
+        f"{p.agency}." if getattr(p, "agency", None) else "",
+        f"Hazard: {p.category}." if getattr(p, "category", None) else "",
+        f"Severity {p.severity}." if getattr(p, "severity", None) else "",
+        p.title or "",
+        p.body or "",
+        f"Area: {p.region_name}." if getattr(p, "region_name", None) else "",
+    ]
+    return " ".join(p_ for p_ in parts if p_)
+
+
 assert EMBEDDING_DIM == 384, "config EMBEDDING_DIM must match the model output dim"

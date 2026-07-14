@@ -20,7 +20,7 @@ from datetime import datetime, timezone
 
 import httpx
 
-from crawler.sources.common import AgencyStorm, ObsPoint, num, season_of, strongest_grade
+from crawler.sources._shared.common import AgencyStorm, ObsPoint, num, season_of, strongest_grade
 
 BASE = "https://www.jma.go.jp/jma/jma-eng/jma-center/rsmc-hp-pub-eg/Besttracks/"
 ALL_ZIP = BASE + "bst_all.zip"
