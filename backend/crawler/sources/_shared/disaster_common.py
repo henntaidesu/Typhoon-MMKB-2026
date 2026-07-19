@@ -27,6 +27,13 @@ class DisasterRec:
     intl_id: str | None = None  # WMO number "YYNN" for a direct, exact match
     typhoon_name: str | None = None
     season_year: int | None = None
+    # True when the record describes a cyclone that identifies ITSELF by name
+    # (a GDACS TC event), as opposed to a bulletin that merely happened near a
+    # storm (NMC 预警). For these, a failed name match means the cyclone is not
+    # in this KB — usually another basin — and the loader must NOT fall back to
+    # time/space attribution, which would hang an Atlantic hurricane on whatever
+    # typhoon was active that week.
+    named_event: bool = False
     event_time: datetime | None = None
     lat: float | None = None
     lon: float | None = None

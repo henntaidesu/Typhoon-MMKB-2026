@@ -15,7 +15,7 @@
         </h4>
         <ul>
           <li v-for="t in active" :key="t.id"
-              :class="{ sel: t.id === store.selectedId, hit: store.semanticHits.has(t.id) }"
+              :class="{ sel: t.id === store.selectedId }"
               @click="store.select(t.id)">
             <div class="name">
               <span class="dot" :style="{ background: catColor(t.max_wind_kt) }"></span>
@@ -23,7 +23,6 @@
             </div>
             <div class="meta">
               {{ t.category || '—' }} · {{ $t('list.peak') }} {{ t.max_wind_kt ?? '?' }} kt
-              <span v-if="t.distance != null" class="sim">{{ $t('list.semanticDistance') }} {{ t.distance }}</span>
             </div>
             <div class="dates">
               {{ fmtDate(t.start_time) }} · <span class="live">{{ $t('list.untilNow') }} {{ fmtDate(t.end_time, true) }}</span>
@@ -50,7 +49,7 @@
           </button>
           <ul v-show="isYearOpen(yg.year)">
             <li v-for="t in yg.items" :key="t.id"
-                :class="{ sel: t.id === store.selectedId, hit: store.semanticHits.has(t.id) }"
+                :class="{ sel: t.id === store.selectedId }"
                 @click="store.select(t.id)">
               <div class="name">
                 <span class="dot" :style="{ background: catColor(t.max_wind_kt) }"></span>
@@ -58,7 +57,6 @@
               </div>
               <div class="meta">
                 {{ t.category || '—' }} · {{ $t('list.peak') }} {{ t.max_wind_kt ?? '?' }} kt
-                <span v-if="t.distance != null" class="sim">{{ $t('list.semanticDistance') }} {{ t.distance }}</span>
               </div>
               <div class="dates">{{ fmtDate(t.start_time) }} → {{ fmtDate(t.end_time) }}</div>
             </li>
@@ -163,14 +161,12 @@ ul { list-style: none; margin: 0; padding: 0; }
 li { padding: 9px 12px 9px 20px; border-top: 1px solid #f1f4f8; cursor: pointer; }
 li:hover { background: #f4f7fb; }
 li.sel { background: #e3effb; }
-li.hit { border-left: 3px solid var(--accent); }
 .name { font-weight: 600; font-size: 14px; }
 .id { color: #98a4b3; font-weight: 400; font-size: 12px; }
 .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 4px; }
 .meta { font-size: 12px; color: #6b7787; margin-top: 3px; }
 .dates { font-size: 12px; color: #8a97a8; margin-top: 2px; font-variant-numeric: tabular-nums; }
 .dates .live { color: #e0392b; font-weight: 600; }
-.sim { color: var(--accent); margin-left: 4px; }
 .msg { padding: 16px; color: #6b7787; font-size: 13px; }
 .msg.err { color: var(--danger); }
 </style>

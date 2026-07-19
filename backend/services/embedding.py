@@ -43,8 +43,34 @@ def embed_many(texts: list[str]) -> list[list[float]]:
     return [v.tolist() for v in vecs]
 
 
-def typhoon_summary(t) -> str:
-    """Compose a readable multilingual description of a typhoon for embedding."""
+# Human-readable phrasing for the disaster_type vocabulary, so a storm's vector
+# carries the *words* a user would search with ("flooding", "landslide") rather
+# than the internal enum token.
+_DISASTER_WORDS = {
+    "flood": "flooding, inundation, 洪水, 浸水",
+    "landslide": "landslide, mudslide, 土砂崩れ, 滑坡",
+    "storm_surge": "storm surge, coastal inundation, 高潮, 风暴潮",
+    "wind_impact": "destructive wind damage, 暴風被害, 大风灾害",
+    "rain": "torrential rain, 大雨, 暴雨",
+    "casualty": "casualties, deaths and injuries, 死傷者, 人员伤亡",
+    "infrastructure": "infrastructure damage, power outage, 停電, 基础设施损毁",
+    "agriculture": "crop and agricultural loss, 農業被害, 农业损失",
+}
+
+
+def typhoon_summary(t, ctx: dict | None = None) -> str:
+    """Compose a readable multilingual description of a typhoon for embedding.
+
+    The identity half (name / season / intensity) makes name lookups work. The
+    ``ctx`` half — where it made landfall, which regions it hit, what secondary
+    disasters and public warnings it produced — is what makes *damage-flavoured*
+    queries ("severe flooding and landslides", "死者が多かった台風") rank
+    meaningfully instead of returning near-random storms. Without it a typhoon
+    vector encodes nothing a user actually searches for.
+
+    ``ctx`` is built in bulk by crawler/embed.py (see `_typhoon_context`); when
+    omitted the summary degrades to the identity half only.
+    """
     parts = [
         f"Typhoon {t.name or t.intl_id} ({t.intl_id}), West Pacific, {t.season_year}.",
         f"Category {t.category}." if t.category else "",
@@ -55,6 +81,23 @@ def typhoon_summary(t) -> str:
         parts.append(f"台風{t.name_jp}。")
     if getattr(t, "name_cn", None):
         parts.append(f"台风{t.name_cn}。")
+
+    ctx = ctx or {}
+    if ctx.get("landfall_regions"):
+        parts.append("Made landfall in " + ", ".join(ctx["landfall_regions"]) + ".")
+    if ctx.get("regions"):
+        parts.append("Affected " + ", ".join(ctx["regions"]) + ".")
+    if ctx.get("disaster_types"):
+        words = [_DISASTER_WORDS.get(d, d) for d in ctx["disaster_types"]]
+        parts.append("Secondary disasters: " + "; ".join(words) + ".")
+    if ctx.get("casualties"):
+        parts.append(f"About {ctx['casualties']} casualties reported. 死傷者・人员伤亡。")
+    if ctx.get("economic_loss_usd"):
+        parts.append(f"Economic loss around {int(ctx['economic_loss_usd'])} USD.")
+    if ctx.get("public_categories"):
+        parts.append("Public warnings issued about " + ", ".join(ctx["public_categories"]) + ".")
+    if ctx.get("snippets"):
+        parts.append(" ".join(ctx["snippets"]))
     return " ".join(p for p in parts if p)
 
 

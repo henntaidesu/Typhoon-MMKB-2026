@@ -27,13 +27,28 @@
     <div class="legend"><span class="w">— {{ $t('detail.wind') }}</span><span class="p">— {{ $t('detail.pressure') }}</span></div>
 
     <h4>{{ $t('detail.affectedRegions') }} ({{ countries.length }})</h4>
-    <ul class="regs">
-      <li v-for="c in countries" :key="c.admin_region_id">
-        <span class="rn">{{ c.name }}</span>
-        <span v-if="c.country && c.admin_level === 1" class="parent">· {{ c.country }}</span>
-        <span v-if="c.landfall" class="lf">{{ $t('detail.landfall') }}</span>
-      </li>
-      <li v-if="!countries.length" class="empty">{{ $t('detail.noRecords') }}</li>
+    <!-- Grouped by administrative level. A storm crossing the Philippines or
+         China touches hundreds of admin-2 municipalities, so listing every
+         level together buries the countries and provinces that actually answer
+         "where did this hit"; the municipality tier stays collapsed. -->
+    <div v-for="g in regionGroups" :key="g.level" class="reg-group">
+      <button v-if="g.collapsible" class="reg-head" @click="toggle(g.level)">
+        <span class="chev">{{ open[g.level] ? '▾' : '▸' }}</span>
+        {{ $t(`detail.adminLevel${g.level}`) }}<span class="c">{{ g.items.length }}</span>
+      </button>
+      <div v-else class="reg-head static">
+        {{ $t(`detail.adminLevel${g.level}`) }}<span class="c">{{ g.items.length }}</span>
+      </div>
+      <ul class="regs" v-show="!g.collapsible || open[g.level]">
+        <li v-for="c in g.items" :key="c.admin_region_id">
+          <span class="rn">{{ c.name }}</span>
+          <span v-if="c.parentLabel" class="parent">· {{ c.parentLabel }}</span>
+          <span v-if="c.landfall" class="lf">{{ $t('detail.landfall') }}</span>
+        </li>
+      </ul>
+    </div>
+    <ul class="regs" v-if="!countries.length">
+      <li class="empty">{{ $t('detail.noRecords') }}</li>
     </ul>
 
     <h4>{{ $t('detail.disasters') }} ({{ disasterCount }})</h4>
@@ -49,7 +64,7 @@
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, reactive } from 'vue'
 import { useTyphoonStore } from '../stores/typhoon'
 const store = useTyphoonStore()
 const t = computed(() => store.selected)
@@ -57,6 +72,24 @@ const pts = computed(() => store.trackPoints)
 const disasters = computed(() => store.disasters?.features || [])
 const disasterCount = computed(() => disasters.value.length)
 const countries = computed(() => store.countries || [])
+
+// Countries and provinces open by default; the admin-2 tier is collapsed since
+// it routinely runs to several hundred entries.
+const open = reactive({ 0: true, 1: true, 2: false })
+function toggle(level) { open[level] = !open[level] }
+
+const regionGroups = computed(() => {
+  const byLevel = new Map()
+  for (const c of countries.value) {
+    const lvl = c.admin_level ?? 1
+    if (!byLevel.has(lvl)) byLevel.set(lvl, [])
+    // An admin-2 name alone ('Can-Avid') is meaningless without its parent.
+    byLevel.get(lvl).push({ ...c, parentLabel: lvl === 0 ? null : (c.country || null) })
+  }
+  return [...byLevel.entries()]
+    .sort((a, b) => a[0] - b[0])
+    .map(([level, items]) => ({ level, items, collapsible: level >= 2 }))
+})
 
 function fmt(s) { return s ? s.slice(0, 10) : '—' }
 
@@ -75,6 +108,18 @@ const presPath = computed(() => scalePath('pressure_hpa', 880, 1010))
 </script>
 
 <style scoped>
+.reg-group { border-bottom: 1px solid #f1f4f8; }
+.reg-head {
+  display: flex; align-items: center; gap: 5px; width: 100%;
+  padding: 5px 0; border: none; background: none; text-align: left;
+  font-size: 11px; font-weight: 700; color: #6b7787; text-transform: uppercase;
+  letter-spacing: .03em; cursor: pointer;
+}
+.reg-head.static { cursor: default; }
+.reg-head:hover:not(.static) { color: var(--accent); }
+.reg-head .chev { width: 10px; color: #98a4b3; }
+.reg-head .c { margin-left: auto; color: #98a4b3; font-weight: 600; }
+
 .detail { padding: 14px; overflow-y: auto; height: 100%; }
 .head { display: flex; justify-content: space-between; align-items: center; }
 h3 { margin: 0; font-size: 17px; }

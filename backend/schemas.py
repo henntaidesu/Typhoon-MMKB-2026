@@ -39,3 +39,11 @@ class TrackPointOut(BaseModel):
 class SemanticQuery(BaseModel):
     q: str
     k: int = 10
+    # Optional spatio-temporal narrowing. When any of these is set the search
+    # becomes a semantic *join* (時空間 x 意味): candidates are first restricted
+    # to typhoons whose track falls in the window, then ranked semantically.
+    bbox: str | None = None  # "minLon,minLat,maxLon,maxLat"
+    date_from: datetime | None = None
+    date_to: datetime | None = None
+    # Cosine-distance cutoff; None disables it and restores raw Top-K behaviour.
+    max_distance: float | None = None

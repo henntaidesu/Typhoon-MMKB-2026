@@ -91,3 +91,6 @@ ehthumbs.db
 Desktop.ini
 $RECYCLE.BIN/
 .DS_Store
+
+# Office lock files, created whenever a .pptx/.docx in docs/ is open
+~$*

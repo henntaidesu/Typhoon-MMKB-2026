@@ -7,6 +7,7 @@ geoalchemy2 accepts directly.
 from __future__ import annotations
 
 import os
+import re
 import sys
 from datetime import timedelta
 
@@ -119,9 +120,51 @@ def _match_typhoon(session: Session, name: str | None, year: int | None) -> Typh
 # / casualty tolls keep accruing for up to a week after the storm has passed.
 _PAD_BEFORE = timedelta(days=2)
 _PAD_AFTER = timedelta(days=7)
-# Max distance (degrees, ~110 km) from a typhoon's impact corridor for a
-# located-but-unnamed warning to be tied to it.
+# Max angular distance (degrees, ~110 km each) from a typhoon's observed track
+# for a located-but-unnamed warning to be tied to it.
 _MAX_MATCH_DEG = 3.0
+# Looser gate applied to a record that already matched by NAME. Storm names are
+# reused across basins in the same season (GDACS's East-Pacific "DORA-23" and
+# the West-Pacific typhoon Dora 2308), so a name match alone can be off by half
+# the planet; a report's stated location may legitimately sit a few hundred km
+# off the track, but never an ocean away.
+_MAX_NAME_MATCH_DEG = 10.0
+
+
+def _track_distance_expr(lat: float, lon: float):
+    """Angular distance (degrees) from (lat, lon) to a track_point, wrap-safe.
+
+    Track longitudes are stored in the 0-360 convention the agencies use (a
+    storm crossing the dateline continues to 185, 190...), while the disaster
+    feeds report -180..180. Subtracting them raw makes a neighbouring point look
+    ~360 deg away, so the query longitude is folded into 0-360 first and the
+    remaining seam closed by taking the shorter way round the circle. Done in
+    plain SQL arithmetic rather than PostGIS precisely because the two
+    conventions cannot be mixed inside one planar geometry."""
+    lon360 = lon % 360  # normalize the Python-side value into the track's frame
+    raw = func.abs(TrackPoint.lon - lon360)
+    dlon = func.least(raw, func.abs(360.0 - raw))  # shorter arc across the seam
+    dlat = func.abs(TrackPoint.lat - lat)
+    return func.sqrt(dlon * dlon + dlat * dlat)
+
+
+def _nearest_track_deg(session: Session, typhoon_ids: list[int], lat, lon):
+    """(typhoon_id, degrees to its closest observed fix), nearest first."""
+    if not typhoon_ids or lat is None or lon is None:
+        return []
+    d = func.min(_track_distance_expr(lat, lon)).label("d")
+    return session.execute(
+        select(TrackPoint.typhoon_id, d)
+        .where(TrackPoint.typhoon_id.in_(typhoon_ids))
+        .group_by(TrackPoint.typhoon_id)
+        .order_by(d)
+    ).all()
+
+
+def _near_track(session: Session, typhoon_id: int, lat, lon, max_deg: float) -> bool:
+    """Whether a located record plausibly belongs to this storm at all."""
+    rows = _nearest_track_deg(session, [typhoon_id], lat, lon)
+    return bool(rows) and rows[0][1] is not None and rows[0][1] <= max_deg
 
 
 def _match_typhoon_by_time_space(
@@ -129,8 +172,8 @@ def _match_typhoon_by_time_space(
 ) -> Typhoon | None:
     """Attribute an unnamed official warning/bulletin to whichever typhoon was
     active near that place and time — used for feeds (NMC 预警) that don't quote a
-    storm name. Prefers the storm whose impact corridor is nearest the point;
-    falls back to the one whose window is temporally closest."""
+    storm name. Prefers the storm whose track passes nearest the point; falls
+    back to the one whose window is temporally closest."""
     if event_time is None:
         return None
     stmt = (
@@ -148,20 +191,15 @@ def _match_typhoon_by_time_space(
     if not cands:
         return None
 
-    # When the record is located, the spatial test is authoritative: it must fall
-    # within a typhoon's impact corridor, else it isn't that storm's disaster (a
-    # located warning far from every corridor is rejected, NOT matched by time).
+    # When the record is located, the spatial test is authoritative: it must sit
+    # near a typhoon's observed track, else it isn't that storm's disaster (a
+    # located warning far from every track is rejected, NOT matched by time).
+    # Measured against the track itself rather than the derived impact corridor:
+    # the corridor is a coarse buffer that some storms inflate to tens of degrees.
     if lat is not None and lon is not None:
-        ids = [c.id for c in cands]
-        pt = func.ST_GeomFromEWKT(_wkt_point(lon, lat))
-        row = session.execute(
-            select(AffectedRegion.typhoon_id,
-                   func.ST_Distance(AffectedRegion.geom, pt).label("d"))
-            .where(AffectedRegion.typhoon_id.in_(ids))
-            .order_by("d").limit(1)
-        ).first()
-        if row is not None and row.d is not None and row.d <= _MAX_MATCH_DEG:
-            return session.get(Typhoon, row.typhoon_id)
+        rows = _nearest_track_deg(session, [c.id for c in cands], lat, lon)
+        if rows and rows[0][1] is not None and rows[0][1] <= _MAX_MATCH_DEG:
+            return session.get(Typhoon, rows[0][0])
         return None
 
     # No location — a single active storm gets it; otherwise the temporally
@@ -176,7 +214,13 @@ def _match_typhoon_by_time_space(
 
 def _resolve_typhoon(session: Session, r) -> Typhoon | None:
     """Try the strongest available link in order: exact WMO id -> storm name ->
-    time/space proximity."""
+    time/space proximity.
+
+    A name match is confirmed against the track when the record is located:
+    tropical-cyclone names are recycled across basins within one season, so
+    "Dora" alone cannot distinguish the West-Pacific typhoon from the
+    East-Pacific hurricane of the same year. An implausible name match falls
+    through to the time/space path rather than being trusted."""
     intl_id = getattr(r, "intl_id", None)
     if intl_id:
         obj = session.scalar(select(Typhoon).where(Typhoon.intl_id == intl_id))
@@ -184,23 +228,38 @@ def _resolve_typhoon(session: Session, r) -> Typhoon | None:
             return obj
     obj = _match_typhoon(session, r.typhoon_name, r.season_year)
     if obj is not None:
-        return obj
+        if r.lat is None or r.lon is None:
+            return obj
+        if _near_track(session, obj.id, r.lat, r.lon, _MAX_NAME_MATCH_DEG):
+            return obj
+    # A self-identifying cyclone whose name we could not resolve is simply not a
+    # storm in this West-Pacific KB. Guessing by time/space here is what filled
+    # the KB with Atlantic and South-Pacific systems.
+    if getattr(r, "named_event", False):
+        return None
     return _match_typhoon_by_time_space(
         session, r.event_time, r.lat, r.lon, r.season_year
     )
 
 
 def _disaster_exists(session: Session, typhoon_id: int, r) -> bool:
-    """Idempotency guard so re-ingesting the same feed doesn't duplicate rows."""
-    stmt = select(SecondaryDisaster.id).where(
-        SecondaryDisaster.typhoon_id == typhoon_id,
-        SecondaryDisaster.source == r.source,
-    )
+    """Idempotency guard so re-ingesting the same feed doesn't duplicate rows.
+
+    A source_url identifies one real-world event, so it is matched *across*
+    typhoons: the name/time-space resolver can otherwise attach the same GDACS
+    report to two storms, and the KB would carry the event twice."""
     url = getattr(r, "source_url", None)
     if url:
-        stmt = stmt.where(SecondaryDisaster.source_url == url)
+        stmt = select(SecondaryDisaster.id).where(
+            SecondaryDisaster.source == r.source,
+            SecondaryDisaster.source_url == url,
+        )
     else:
-        stmt = stmt.where(SecondaryDisaster.description == r.description)
+        stmt = select(SecondaryDisaster.id).where(
+            SecondaryDisaster.typhoon_id == typhoon_id,
+            SecondaryDisaster.source == r.source,
+            SecondaryDisaster.description == r.description,
+        )
     return session.scalar(stmt) is not None
 
 
@@ -242,6 +301,25 @@ def _public_info_exists(session: Session, typhoon_id: int, r) -> bool:
     return session.scalar(stmt) is not None
 
 
+# Feeds that put the headline in the body with a "[发布方]" prefix and leave the
+# title empty (中央气象台预警 does this for every row).
+_BODY_PREFIX = re.compile(r"^\s*\[[^\]]{1,24}\]\s*")
+
+
+def _public_title(r) -> str | None:
+    """A displayable headline, derived from the body when the feed omits one.
+
+    A blank title renders as an empty row in the search results, so the first
+    line of the body — which for these feeds *is* the headline — stands in."""
+    title = (getattr(r, "title", None) or "").strip()
+    if title:
+        return title
+    body = (r.description or "").strip()
+    if not body:
+        return None
+    return _BODY_PREFIX.sub("", body.split("\n", 1)[0]).strip()[:200] or None
+
+
 def load_public_info(records) -> int:
     """Match public-information records (公共情报: warnings / advisories /
     evacuation / news) to KB typhoons and insert PublicInfo rows. Uses the same
@@ -261,7 +339,7 @@ def load_public_info(records) -> int:
                 category=getattr(r, "category", None),
                 agency=getattr(r, "agency", None) or r.source,
                 severity=getattr(r, "severity", None),
-                title=getattr(r, "title", None),
+                title=_public_title(r),
                 body=r.description,
                 geom=geom, lat=r.lat, lon=r.lon,
                 publish_time=r.event_time,

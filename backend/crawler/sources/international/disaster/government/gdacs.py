@@ -84,6 +84,10 @@ def parse_events(features: list[dict]) -> list[DisasterRec]:
         recs.append(DisasterRec(
             typhoon_name=(name.title() if name else None),
             season_year=ts.year if ts else None,
+            # GDACS covers every basin. Each event IS a named cyclone, so if the
+            # name doesn't resolve to a KB typhoon the event belongs to another
+            # basin and must be dropped, not guessed at by time/space.
+            named_event=True,
             disaster_type="storm_surge" if "surge" in str(sev.get("severitytext", "")).lower() else "wind_impact",
             lat=lat, lon=lon, event_time=ts,
             casualties=None,
@@ -137,6 +141,7 @@ def parse_news(features: list[dict]) -> list[PublicInfoRec]:
             title=(name.title() if name else None),
             typhoon_name=(name.title() if name else None),
             season_year=ts.year if ts else None,
+            named_event=True,  # see parse_events — global feed, name is the key
             event_time=ts, lat=lat, lon=lon,
             description=(f"GDACS {alert} report: {p.get('htmldescription') or p.get('description') or name}."
                         + (f" Affected: {region}." if region else "")),

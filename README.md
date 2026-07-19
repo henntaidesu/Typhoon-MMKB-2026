@@ -18,5 +18,19 @@
 | `backend/` | FastAPI + SQLAlchemy ORM。`models.py` 用 ORM 数据库对象定义全部表；`init_db.py` 建库/扩展/表；`routers/` 提供台风/轨迹/灾害/公共情报(GeoJSON)与语义/时空/混合查询。 |
 | `backend/crawler/` | `sources/ibtracs.py` 轨迹、`sources/gdacs.py` 次生灾害、`sources/digital_typhoon.py` 卫星影像+灾情；**受灾情报**(应急管理部/消防庁/ReliefWeb) 与 **公共情报**(中央气象台预警/香港天文台/気象庁警報/GDACS报道) 分别入库；`embed.py` 生成向量；`pipeline.py` 一键编排。 |
 | `frontend/` | Vue3 + Vite + Pinia + Leaflet。地图路径(强度着色)、时间轴回放、次生灾害标记、语义联想检索框、强度曲线与详情面板。 |
+| `backend/tests/` | 匹配与检索规则的单元测试 + 知识库数据不变式（纯标准库 `unittest`，无额外依赖）。 |
 | `docs/` | 服务器准备、构成图、数据结构、查询示例（报告素材）。 |
+
+## 开发
+
+```bash
+start.bat                                  # 后端 :8000 + 前端 :5173（后端不热重载，改代码要重启那个窗口）
+
+cd backend
+python -m unittest discover -s tests -t .  # 规则测试 + 数据不变式
+python crawler/repair.py --dry-run         # 只报告将清理的错配记录，不写库
+python crawler/embed.py --all              # 改过 typhoon_summary() 后必须重跑，否则仍按旧文本检索
+```
+
+`tests/` 里的**数据不变式**会连数据库；连不上时自动跳过，其余纯逻辑测试照常运行。它们是抓取规则的回归网 —— 若某次改动又把跨洋盆气旋挂到西太台风上，下次抓取后这里会失败。
 

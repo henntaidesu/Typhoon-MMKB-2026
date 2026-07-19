@@ -18,11 +18,17 @@ class CrawlParams(BaseModel):
     variant: str | None = None
     years: list[int] | None = None
     mode: str | None = None  # 'new' (current season) | 'history' (past seasons); temporal sources only
+    intl_id: str | None = None      # selected typhoon (gdelt_news web search)
+    maxrecords: str | None = None   # max articles to fetch (gdelt_news)
 
 
 @router.get("")
 def list_sources():
-    return {"active": ingest.active(), "sources": ingest.list_sources()}
+    return {
+        "active": ingest.active(),
+        "categories": ingest.list_categories(),
+        "sources": ingest.list_sources(),
+    }
 
 
 @router.get("/status")

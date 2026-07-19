@@ -77,6 +77,26 @@ def by_country(session: Session = Depends(get_session)):
     return out
 
 
+def _region_visible(level: int, landfall_count: int, impact_count: int) -> bool:
+    """Whether an admin region belongs in a 登陆频次 view at this level.
+
+    Shared by the bar list and the choropleth so the two cannot answer different
+    questions for the same level setting — they previously diverged, and level 2
+    showed 4681 corridor-touched units in the list against 838 actual landfall
+    sites on the map.
+
+    Countries (level 0) always render, for context. Provinces (level 1) render
+    if touched at all. Prefectures / cities (level 2) are thousands of units, so
+    only actual landfall sites render — otherwise the view stops being about
+    landfall frequency and the payload balloons.
+    """
+    if level == 0:
+        return True
+    if level == 1:
+        return bool(landfall_count or impact_count)
+    return bool(landfall_count)
+
+
 @router.get("/by-region")
 def by_region(
     session: Session = Depends(get_session),
@@ -109,7 +129,7 @@ def by_region(
     out = []
     for rid, name, ctry, parent, impc in session.execute(stmt).all():
         lfc = lf_map.get(rid, 0)
-        if lfc or impc:  # only regions actually touched
+        if _region_visible(level, lfc, impc):
             out.append({"admin_region_id": rid, "name": name, "country": ctry,
                         "parent_name": parent, "landfall_count": lfc, "impact_count": impc})
     out.sort(key=lambda r: (r["landfall_count"], r["impact_count"]), reverse=True)
@@ -149,13 +169,7 @@ def landfall_geojson(
         if not geo:
             continue
         lfc = lf_map.get(rid, 0)
-        # Countries (level 0) always render for context. Provinces (level 1)
-        # render if touched at all (corridor or landfall). Prefectures/cities
-        # (level 2) are thousands of units — render only actual landfall sites,
-        # so the choropleth payload stays small and on-topic (登陆频次).
-        if level == 1 and not (lfc or impc):
-            continue
-        if level >= 2 and not lfc:
+        if not _region_visible(level, lfc, impc):
             continue
         max_lf = max(max_lf, lfc)
         feats.append({
@@ -172,7 +186,7 @@ def region_tracks(
     region_id: int,
     session: Session = Depends(get_session),
     landfall_only: bool = Query(False, description="only storms that made landfall here"),
-    limit: int = Query(300, le=1000),
+    limit: int | None = Query(None, description="max storms; omit for all"),
 ):
     """Tracks of every typhoon that affected (or landed in) an admin region, as a
     GeoJSON LineString FeatureCollection — powers the interactive click-to-map.
@@ -186,11 +200,11 @@ def region_tracks(
     else:
         sub = select(func.distinct(TyphoonRegionImpact.typhoon_id)).where(
             TyphoonRegionImpact.admin_region_id == region_id)
-    typhoons = session.scalars(
-        select(Typhoon).where(Typhoon.id.in_(sub))
-        .order_by(Typhoon.season_year.desc().nullslast(), Typhoon.max_wind_kt.desc().nullslast())
-        .limit(limit)
-    ).all()
+    q = (select(Typhoon).where(Typhoon.id.in_(sub))
+         .order_by(Typhoon.season_year.desc().nullslast(), Typhoon.max_wind_kt.desc().nullslast()))
+    if limit is not None:
+        q = q.limit(limit)
+    typhoons = session.scalars(q).all()
     total = session.scalar(select(func.count()).select_from(sub.subquery())) or 0
     tids = [t.id for t in typhoons]
 

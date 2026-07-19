@@ -14,9 +14,14 @@
 
     <div v-if="loadErr" class="ds-err">{{ t('sources.loadFailed') }}{{ loadErr }}</div>
 
-    <div class="grid">
+    <section v-for="g in groups" :key="g.key" class="cat">
+      <div class="cat-head">
+        <h3 class="cat-title">{{ g.label }}</h3>
+        <span v-if="g.desc" class="cat-desc">{{ g.desc }}</span>
+      </div>
+      <div class="grid">
       <article
-        v-for="s in sources"
+        v-for="s in g.items"
         :key="s.key"
         class="card"
         :class="{ running: s.state?.status === 'running' }"
@@ -35,6 +40,30 @@
             <select v-if="p.type === 'select'" v-model="form[s.key][p.name]">
               <option v-for="o in p.options" :key="o" :value="o">{{ o }}</option>
             </select>
+            <template v-else-if="p.type === 'typhoon'">
+              <div class="typ-cascade">
+                <select
+                  :value="typYear[s.key + '.' + p.name] || ''"
+                  @change="onYearChange(s.key, p.name, $event.target.value)"
+                >
+                  <option value="">{{ t('sources.selectYear') }}</option>
+                  <option v-for="y in typhoonYears" :key="y" :value="y">{{ y }}</option>
+                </select>
+                <select
+                  v-model="form[s.key][p.name]"
+                  :disabled="!typYear[s.key + '.' + p.name]"
+                >
+                  <option value="">{{ t('sources.selectTyphoon') }}</option>
+                  <option
+                    v-for="ty in typhoonsForYear(typYear[s.key + '.' + p.name])"
+                    :key="ty.intl_id"
+                    :value="ty.intl_id"
+                  >
+                    {{ ty.intl_id }} · {{ ty.name || '—' }}
+                  </option>
+                </select>
+              </div>
+            </template>
             <input v-else v-model="form[s.key][p.name]" :placeholder="p.default || ''" />
           </label>
         </div>
@@ -70,18 +99,69 @@
           {{ s.state?.status === 'running' ? t('sources.crawling') : t('sources.startCrawl') }}
         </button>
       </article>
-    </div>
+      </div>
+    </section>
   </div>
 </template>
 
 <script setup>
-import { reactive, ref, onMounted, onUnmounted, h } from 'vue'
+import { reactive, ref, computed, onMounted, onUnmounted, h } from 'vue'
 import { useI18n } from 'vue-i18n'
 import api from '../api/client'
 
 const { t } = useI18n()
 
 const sources = ref([])
+const categories = ref([])
+const typhoons = ref([])   // for 'typhoon'-type params (e.g. GDELT news search)
+// Selected year per typhoon-picker, keyed by "<sourceKey>.<paramName>". Drives the
+// cascading year → typhoon selects so the typhoon list stays scoped to one season.
+const typYear = reactive({})
+
+// Distinct season years present in the typhoon list, newest first.
+const typhoonYears = computed(() => {
+  const ys = new Set()
+  for (const ty of typhoons.value) if (ty.season_year != null) ys.add(ty.season_year)
+  return Array.from(ys).sort((a, b) => b - a)
+})
+
+// Typhoons within one season, sorted by intl_id so the picker reads in order.
+function typhoonsForYear(year) {
+  if (!year) return []
+  const y = Number(year)
+  return typhoons.value
+    .filter((ty) => ty.season_year === y)
+    .sort((a, b) => String(a.intl_id).localeCompare(String(b.intl_id)))
+}
+
+// Switching year clears the previously picked typhoon (it belongs to another season).
+function onYearChange(sourceKey, paramName, year) {
+  typYear[sourceKey + '.' + paramName] = year
+  if (form[sourceKey]) form[sourceKey][paramName] = ''
+}
+
+// Group the flat source list into ordered category sections so related feeds
+// (台风路径 / 受灾情报 / 公共情报 / 地理边界 / 多媒体) sit together instead of
+// one undifferentiated grid. Falls back to a single "其他" group for any source
+// whose category isn't in the catalogue.
+const groups = computed(() => {
+  const cats = categories.value.length
+    ? categories.value
+    : [{ key: '', label: '', desc: '' }]
+  const out = cats.map((c) => ({ ...c, items: [] }))
+  const byKey = new Map(out.map((g) => [g.key, g]))
+  let other = null
+  for (const s of sources.value) {
+    const g = byKey.get(s.category || '')
+    if (g) {
+      g.items.push(s)
+    } else {
+      if (!other) { other = { key: '__other', label: t('sources.otherCategory'), desc: '', items: [] }; out.push(other) }
+      other.items.push(s)
+    }
+  }
+  return out.filter((g) => g.items.length)
+})
 const form = reactive({})       // key -> { paramName: value }
 const busy = ref(false)         // true while any crawl is active
 const loadErr = ref(null)
@@ -139,8 +219,16 @@ async function loadList() {
     const data = await api.listSources()
     ensureForm(data.sources)
     sources.value = data.sources
+    categories.value = data.categories || []
     busy.value = !!data.active
     loadErr.value = null
+    // If any source needs a typhoon picker, load the list once (newest first).
+    if (!typhoons.value.length &&
+        data.sources.some((s) => s.params.some((p) => p.type === 'typhoon'))) {
+      try {
+        typhoons.value = await api.listTyphoons({ limit: 20000 })
+      } catch { /* selector just stays empty */ }
+    }
   } catch (e) {
     loadErr.value = String(e.message || e)
   }
@@ -177,6 +265,14 @@ async function start(s, mode) {
   const f = form[s.key] || {}
   if ('variant' in f) body.variant = f.variant
   if ('years' in f) body.years = parseYears(f.years)
+  if ('maxrecords' in f) body.maxrecords = f.maxrecords
+  if ('intl_id' in f) {
+    // The datalist input may hold "2609" or a pasted "2609 · Bavi (2026)" — keep
+    // the leading token, which is the intl_id the backend matches on.
+    const iid = String(f.intl_id || '').trim().split(/[\s·]/)[0]
+    if (!iid) { alert(t('sources.pickTyphoon')); return }
+    body.intl_id = iid
+  }
   if (mode) body.mode = mode      // 'new' | 'history' for temporal sources
   try {
     const res = await api.startCrawl(s.key, body)
@@ -209,6 +305,11 @@ onUnmounted(() => clearInterval(timer))
 .update-msg.err { color: #b93b3b; background: #fdecec; }
 .ds-err { background: #fdecec; color: #b93b3b; padding: 10px 12px; border-radius: 8px; margin-bottom: 14px; font-size: 13px; }
 
+.cat { margin-bottom: 26px; }
+.cat-head { display: flex; align-items: baseline; gap: 10px; margin: 0 0 12px; padding-bottom: 6px; border-bottom: 1px solid #e6ebf2; }
+.cat-title { margin: 0; font-size: 15px; font-weight: 700; color: #16233a; }
+.cat-desc { font-size: 12px; color: #8a97a8; }
+
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; }
 
 .card {
@@ -232,6 +333,10 @@ onUnmounted(() => clearInterval(timer))
 .param select, .param input {
   padding: 6px 8px; border: 1px solid #d3dae4; border-radius: 6px; font-size: 13px; color: #1a2233;
 }
+.typ-cascade { display: flex; gap: 6px; }
+.typ-cascade select { flex: 1; min-width: 0; }
+.typ-cascade select:first-child { flex: 0 0 90px; }
+.typ-cascade select:disabled { background: #f1f4f8; color: #a2adbb; cursor: not-allowed; }
 
 .msg { font-size: 12px; color: #445167; background: #f5f8fc; border-radius: 6px; padding: 7px 9px; margin-bottom: 8px; word-break: break-word; }
 .counts { display: flex; flex-wrap: wrap; gap: 10px; font-size: 12px; color: #445167; margin-bottom: 10px; }

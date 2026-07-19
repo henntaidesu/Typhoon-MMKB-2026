@@ -36,6 +36,9 @@ class PublicInfoRec:
     intl_id: str | None = None       # WMO number "YYNN" for a direct, exact match
     typhoon_name: str | None = None
     season_year: int | None = None
+    # See DisasterRec.named_event — the record names its own cyclone, so a
+    # failed name match must not fall through to time/space attribution.
+    named_event: bool = False
     event_time: datetime | None = None  # publish/issue time
     lat: float | None = None
     lon: float | None = None

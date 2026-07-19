@@ -31,7 +31,8 @@ export default {
   getTrack: (id) => get(`/typhoons/${id}/track`),
   getDisasters: (id) => get(`/typhoons/${id}/disasters`),
   getRegions: (id) => get(`/typhoons/${id}/affected-regions`),
-  semantic: (q, k = 10) => post('/search/semantic', { q, k }),
+  // body: { q, k, bbox?, date_from?, date_to?, max_distance? }
+  semantic: (body) => post('/search/semantic', { k: 10, ...body }),
   spatiotemporal: (params) => get('/search/spatiotemporal', params),
   hybrid: (params) => get('/search/hybrid', params),
   stats: () => get('/search/stats'),

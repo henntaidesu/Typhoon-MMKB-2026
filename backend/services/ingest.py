@@ -34,12 +34,25 @@ if _BACKEND not in sys.path:
 # `temporal: True` marks a time-series source that supports the 新数据 / 历史数据
 # split — the UI shows two buttons and passes mode="new" (current season only) or
 # mode="history" (all past seasons). See _temporal_scope().
+#
+# `category` groups the sources on the 数据源 page so related feeds sit together
+# instead of one flat list (台风路径 / 受灾情报 / 公共情报 / 地理边界与影响 /
+# 多媒体影像). `CATEGORIES` defines the display order + heading for each group.
+CATEGORIES = [
+    {"key": "typhoon", "label": "台风路径", "desc": "各官方机构的台风实况 / 最佳路径"},
+    {"key": "disaster", "label": "受灾情报", "desc": "已发生的损失：灾害事件与官方灾情通报"},
+    {"key": "public", "label": "公共情报", "desc": "当局公开发布的预警 · 警报 · 报道"},
+    {"key": "geo", "label": "地理边界与影响", "desc": "行政边界参考数据与派生地理影响"},
+    {"key": "media", "label": "多媒体影像", "desc": "卫星影像与灾情多媒体"},
+]
+
 SOURCES = [
     {
         "key": "cma",
         "name": "中央气象台 · 实况路径",
         "provider": "CMA 中国气象局 (typhoon.nmc.cn)",
         "kind": "台风实况路径",
+        "category": "typhoon",
         "temporal": True,
         "params": [],
     },
@@ -48,6 +61,7 @@ SOURCES = [
         "name": "日本气象厅 · 最佳路径",
         "provider": "JMA / RSMC 东京",
         "kind": "台风路径(官方)",
+        "category": "typhoon",
         "depends": "cma",
         "temporal": True,
         "params": [],
@@ -57,6 +71,7 @@ SOURCES = [
         "name": "JTWC · 最佳路径",
         "provider": "JTWC 美国联合台风警报中心",
         "kind": "台风路径(官方)",
+        "category": "typhoon",
         "depends": "cma",
         "temporal": True,
         "params": [],
@@ -66,6 +81,7 @@ SOURCES = [
         "name": "GDACS 灾害事件",
         "provider": "GDACS",
         "kind": "次生灾害",
+        "category": "disaster",
         "depends": "cma",
         "temporal": True,
         "params": [
@@ -78,6 +94,7 @@ SOURCES = [
         "name": "官方灾情通报",
         "provider": "应急管理部 / 消防庁 / ReliefWeb",
         "kind": "受灾情报",
+        "category": "disaster",
         "depends": "cma",
         "temporal": True,
         "params": [
@@ -86,10 +103,51 @@ SOURCES = [
         ],
     },
     {
-        "key": "public_info",
-        "name": "官方预警 / 警报",
-        "provider": "中央气象台 / 香港天文台 / 気象庁",
-        "kind": "公共情报",
+        "key": "gdelt_news",
+        "name": "台风新闻检索 (GDELT)",
+        "provider": "GDELT 全球媒体 · 官方媒体/新闻",
+        "kind": "受灾情报",
+        "category": "disaster",
+        "depends": "cma",
+        "params": [
+            {"name": "intl_id", "type": "typhoon", "label": "选择台风(按名称/编号检索该台风相关新闻)"},
+            {"name": "maxrecords", "type": "select", "label": "最多抓取文章数",
+             "options": ["50", "75", "150", "250"], "default": "75"},
+        ],
+    },
+    {
+        "key": "nmc_public",
+        "name": "中央气象台 · 预警",
+        "provider": "中央气象台 (NMC · nmc.cn)",
+        "kind": "官方预警",
+        "category": "public",
+        "depends": "cma",
+        "params": [],
+    },
+    {
+        "key": "hko_public",
+        "name": "香港天文台 · 警告",
+        "provider": "香港天文台 (HKO)",
+        "kind": "官方警告",
+        "category": "public",
+        "depends": "cma",
+        "params": [],
+    },
+    {
+        "key": "jma_public",
+        "name": "気象庁 · 気象警報",
+        "provider": "気象庁 (JMA)",
+        "kind": "官方警报",
+        "category": "public",
+        "depends": "cma",
+        "params": [],
+    },
+    {
+        "key": "mem_response",
+        "name": "应急管理部 · 应急响应",
+        "provider": "应急管理部 (MEM)",
+        "kind": "应急响应",
+        "category": "public",
         "depends": "cma",
         "params": [],
     },
@@ -98,6 +156,7 @@ SOURCES = [
         "name": "Natural Earth 行政边界",
         "provider": "Natural Earth (public domain)",
         "kind": "基础地理边界",
+        "category": "geo",
         "params": [],
     },
     {
@@ -105,6 +164,7 @@ SOURCES = [
         "name": "GADM 地级市边界",
         "provider": "GADM 4.1 (学术用途)",
         "kind": "基础地理边界",
+        "category": "geo",
         "depends": "naturalearth",
         "params": [],
     },
@@ -113,6 +173,7 @@ SOURCES = [
         "name": "地理影响分析",
         "provider": "派生：轨迹 × 行政边界",
         "kind": "地理影响分析",
+        "category": "geo",
         "depends": "naturalearth",
         "params": [],
     },
@@ -121,6 +182,7 @@ SOURCES = [
         "name": "Digital Typhoon",
         "provider": "NII 情報学研究所",
         "kind": "卫星影像 / 灾情",
+        "category": "media",
         "depends": "cma",
         "params": [],
     },
@@ -191,6 +253,11 @@ def get_status(key: str) -> dict:
 
 def all_status() -> dict:
     return _state
+
+
+def list_categories() -> list[dict]:
+    """Ordered category headings for grouping the source cards on the 数据源 page."""
+    return CATEGORIES
 
 
 def list_sources() -> list[dict]:
@@ -501,35 +568,85 @@ def _run_disaster_bulletins(params: dict, emit) -> dict:
     return {"受灾情报": total, "新增向量": nd}
 
 
-def _run_public_info(params: dict, emit) -> dict:
-    """公共情报 (warnings/advisories authorities announce): 中央气象台 预警,
-    香港天文台 警告, 気象庁 気象警報. Real-time feeds — they return rows only
-    while a typhoon-driven hazard is currently in force; matched to whichever
-    storm is active there and then."""
-    from crawler.sources.china.disaster.government import nmc_alarm, hko
-    from crawler.sources.japan.disaster.government import jma_warning
+def _run_gdelt(params: dict, emit) -> dict:
+    """台风新闻检索 (GDELT): for ONE user-selected typhoon, search global news /
+    official media for what happened where it passed (casualties / flooding /
+    damage), geocode each headline against the admin_region gazetteer, and load
+    the results as SecondaryDisaster rows keyed to that storm by intl_id."""
+    from sqlalchemy import select
+
+    from crawler.sources.international.disaster.civilian import gdelt
+    from crawler import load, embed as embed_mod
+    from db import SessionLocal
+    from models import Typhoon
+
+    intl_id = (params.get("intl_id") or "").strip()
+    if not intl_id:
+        raise RuntimeError("请先选择一个台风再开始检索。")
+    try:
+        maxrecords = int(params.get("maxrecords") or 75)
+    except (TypeError, ValueError):
+        maxrecords = 75
+
+    with SessionLocal() as s:
+        t = s.scalar(select(Typhoon).where(Typhoon.intl_id == intl_id))
+        if t is None:
+            raise RuntimeError(f"知识库中找不到台风 {intl_id}，请先抓取其轨迹。")
+        info = {
+            "intl_id": t.intl_id, "name": t.name, "name_cn": t.name_cn,
+            "name_jp": t.name_jp, "season_year": t.season_year,
+            "start_time": t.start_time, "end_time": t.end_time,
+        }
+
+    emit(f"检索台风 {intl_id} {info.get('name') or ''} 的相关新闻 …")
+    recs = gdelt.collect(info, maxrecords=maxrecords, emit=emit)
+    n = load.load_disasters(recs)
+    located = sum(1 for r in recs if r.lat is not None)
+    if n:
+        emit("生成语义向量 …")
+        embed_mod.backfill()
+    emit(f"完成：新增 {n} 条新闻灾情（{located} 条已定位到地图）。")
+    return {"新闻灾情": n, "已定位": located, "检索文章": len(recs)}
+
+
+def _run_public_source(label: str, collect_fn, emit) -> dict:
+    """Ingest one 公共情报 (warnings/advisories authorities announce) feed and
+    refresh its embeddings. These are real-time feeds — they return rows only
+    while a typhoon-driven hazard is currently in force; each row is matched to
+    whichever storm is active there and then. Shared by the per-agency runners
+    (中央气象台 预警 / 香港天文台 警告 / 気象庁 気象警報 / 应急管理部 应急响应)
+    so each source gets its own card + status."""
     from crawler import load, embed as embed_mod
 
-    from crawler.sources.china.disaster.government import mem
-
-    total = 0
-    for label, fn in (
-        ("中央气象台预警", lambda: nmc_alarm.collect(emit=emit)),
-        ("香港天文台", lambda: hko.collect(emit=emit)),
-        ("気象庁警報", lambda: jma_warning.collect(emit=emit)),
-        ("应急管理部响应", lambda: mem.collect_emergency(emit=emit)),
-    ):
-        try:
-            n = load.load_public_info(fn())
-            total += n
-            emit(f"{label}：匹配入库 {n} 条公共情报")
-        except Exception as e:  # noqa: BLE001
-            emit(f"{label}：跳过（{_decode(e)}）")
-
-    emit("生成语义向量 …")
+    n = load.load_public_info(collect_fn())
+    emit(f"{label}：匹配入库 {n} 条公共情报，生成语义向量 …")
     _, _, npub = embed_mod.backfill()
-    emit(f"完成：本次新增公共情报 {total} 条。")
-    return {"公共情报": total, "新增向量": npub}
+    emit(f"完成：本次新增公共情报 {n} 条。")
+    return {"公共情报": n, "新增向量": npub}
+
+
+def _run_nmc_public(params: dict, emit) -> dict:
+    """中央气象台 预警 — current warnings, time/space-matched to active storms."""
+    from crawler.sources.china.disaster.government import nmc_alarm
+    return _run_public_source("中央气象台预警", lambda: nmc_alarm.collect(emit=emit), emit)
+
+
+def _run_hko_public(params: dict, emit) -> dict:
+    """香港天文台 警告 — current warnings, time/space-matched."""
+    from crawler.sources.china.disaster.government import hko
+    return _run_public_source("香港天文台", lambda: hko.collect(emit=emit), emit)
+
+
+def _run_jma_public(params: dict, emit) -> dict:
+    """気象庁 気象警報 — current 警報, time/space-matched by prefecture."""
+    from crawler.sources.japan.disaster.government import jma_warning
+    return _run_public_source("気象庁警報", lambda: jma_warning.collect(emit=emit), emit)
+
+
+def _run_mem_response(params: dict, emit) -> dict:
+    """应急管理部 应急响应 — national emergency-response announcements."""
+    from crawler.sources.china.disaster.government import mem
+    return _run_public_source("应急管理部响应", lambda: mem.collect_emergency(emit=emit), emit)
 
 
 def _run_naturalearth(params: dict, emit) -> dict:
@@ -544,6 +661,8 @@ def _run_naturalearth(params: dict, emit) -> dict:
     n1 = sum(1 for r in recs if r.admin_level == 1)
     emit(f"解析到 {len(recs)} 个区域（{n0} 国家 / {n1} 省），写入数据库 …")
     n = load.load_admin_regions(recs)
+    from services import geocode
+    geocode.reload()  # refresh the news-geocoder gazetteer with the new regions
     emit(f"完成：库内共 {load.admin_region_count()} 个行政区域。")
     return {"国家": n0, "省/县": n1, "库内区域": load.admin_region_count()}
 
@@ -558,6 +677,8 @@ def _run_gadm(params: dict, emit) -> dict:
     recs = gadm.parse()
     emit(f"解析到 {len(recs)} 个地级市/二级行政区，写入数据库 …")
     n = load.load_admin_regions(recs)
+    from services import geocode
+    geocode.reload()  # refresh the news-geocoder gazetteer with the new 地级市
     emit(f"完成：写入 {n} 个二级行政区；库内区域共 {load.admin_region_count()}。")
     return {"地级市/二级区": n, "库内区域": load.admin_region_count()}
 
@@ -619,7 +740,11 @@ RUNNERS = {
     "jtwc": _run_jtwc,
     "gdacs": _run_gdacs,
     "disaster_bulletins": _run_disaster_bulletins,
-    "public_info": _run_public_info,
+    "gdelt_news": _run_gdelt,
+    "nmc_public": _run_nmc_public,
+    "hko_public": _run_hko_public,
+    "jma_public": _run_jma_public,
+    "mem_response": _run_mem_response,
     "naturalearth": _run_naturalearth,
     "gadm": _run_gadm,
     "geo_impact": _run_geo_impact,

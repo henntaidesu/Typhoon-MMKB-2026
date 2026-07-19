@@ -20,10 +20,16 @@ const props = defineProps({
   items: { type: Array, default: () => [] },   // [{label, value, id?}]
   color: { type: String, default: '#0b6bcb' },
   activeId: { type: [Number, String], default: null },
+  // Optional fixed scale denominator; keeps bar widths stable when the parent
+  // only renders a slice (lazy load) or sorts ascending. Falls back to items' max.
+  max: { type: Number, default: null },
 })
 const emit = defineEmits(['select'])
 
-const max = computed(() => Math.max(1, ...props.items.map((i) => i.value || 0)))
+const max = computed(() => {
+  const m = props.max != null ? props.max : Math.max(0, ...props.items.map((i) => i.value || 0))
+  return Math.max(1, m)
+})
 function pct(v) { return Math.round(((v || 0) / max.value) * 100) }
 </script>
 
