@@ -40,6 +40,7 @@ let trackLayer = null
 let regionLayer = null
 let disasterLayer = null
 let landfallLayer = null
+let publicLayer = null // 公共情报 of the selected typhoon
 let searchLayer = null // located hits of the current search
 let cursor = null // moving position marker
 
@@ -158,17 +159,45 @@ watch(() => store.regions, (regions) => {
   }).addTo(map)
 })
 
+// 受灾情报 for the selected typhoon. Red against the blue of 公共情报 below, and
+// the same red the search layer uses for damage — one concept, one colour.
+// (Was a default teardrop pin, which matched nothing else on the map.)
 watch(() => store.disasters, (disasters) => {
   disasterLayer = clear(disasterLayer)
   if (!disasters?.features?.length) return
   disasterLayer = L.geoJSON(disasters, {
-    pointToLayer: (f, latlng) => L.marker(latlng),
+    pointToLayer: (f, latlng) => L.circleMarker(latlng, {
+      radius: 5, color: '#fff', weight: 1.5, fillColor: '#a5342a', fillOpacity: 0.85,
+    }),
     onEachFeature: (f, layer) => {
       const p = f.properties
       layer.bindPopup(
         `<b>${p.disaster_type}</b><br>${(p.description || '').slice(0, 200)}<br>` +
         (p.casualties ? `${t('map.casualties')}: ${p.casualties}<br>` : '') +
         (p.source ? `${t('map.source')}: ${p.source}` : '') +
+        (p.source_url ? ` · <a href="${p.source_url}" target="_blank">${t('map.link')}</a>` : ''),
+      )
+    },
+  }).addTo(map)
+})
+
+// 公共情报 for the selected typhoon. Blue is this app's colour for public
+// information throughout (search results use it too), against the red family
+// used for damage that actually occurred. Drawn smaller than a search hit so
+// the two nest legibly when a search result belongs to the selected storm.
+watch(() => store.publicInfos, (fc) => {
+  publicLayer = clear(publicLayer)
+  if (!fc?.features?.length) return
+  publicLayer = L.geoJSON(fc, {
+    pointToLayer: (f, latlng) => L.circleMarker(latlng, {
+      radius: 5, color: '#fff', weight: 1.5, fillColor: '#24558f', fillOpacity: 0.85,
+    }),
+    onEachFeature: (f, layer) => {
+      const p = f.properties
+      layer.bindPopup(
+        `<b>${p.info_type}</b>${p.severity ? ` · ${p.severity}` : ''}<br>` +
+        `${(p.title || p.body || '').slice(0, 200)}<br>` +
+        (p.agency ? `${t('map.source')}: ${p.agency}` : '') +
         (p.source_url ? ` · <a href="${p.source_url}" target="_blank">${t('map.link')}</a>` : ''),
       )
     },

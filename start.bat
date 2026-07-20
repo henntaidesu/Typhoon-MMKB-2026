@@ -1,4 +1,5 @@
 @echo off
+setlocal
 echo ========================================
 echo   Typhoon MMKB dev startup script
 echo ========================================
@@ -8,7 +9,7 @@ set ROOT=%~dp0
 set BACKEND=%ROOT%backend
 set FRONTEND=%ROOT%frontend
 
-echo [1/2] Activating conda env MMKB and starting backend (uvicorn main:app, no auto-reload)...
+echo [1/3] Activating conda env MMKB...
 call conda activate MMKB
 if errorlevel 1 (
   echo [ERROR] Failed to activate conda env MMKB. Is conda installed and the env created?
@@ -16,12 +17,7 @@ if errorlevel 1 (
   exit /b 1
 )
 
-cd /d %BACKEND%
-start "MMKB Backend" cmd /k python -m uvicorn main:app --port 8000
-
-timeout /t 2 /nobreak >nul
-
-echo [2/2] Preparing frontend dev server...
+echo [2/3] Checking Node.js toolchain...
 where node >nul 2>&1
 if errorlevel 1 (
   echo [ERROR] Node.js not found. Install it and add to PATH: https://nodejs.org/
@@ -46,14 +42,29 @@ if not exist node_modules (
   )
 )
 
+echo [3/3] Starting backend in this console (background) and frontend in foreground...
+cd /d %BACKEND%
+start /b "" python -m uvicorn main:app --port 8000
+
+timeout /t 2 /nobreak >nul
+
 echo.
 echo ========================================
 echo   Frontend ^(Vite^):  http://localhost:5173
 echo   Backend API:      http://localhost:8000
 echo   API docs:         http://localhost:8000/docs
-echo   Ctrl+C stops the frontend; close the "MMKB Backend" window to stop the backend
-echo   Backend does NOT auto-reload - restart that window to pick up code changes
+echo   Both run in THIS window - Ctrl+C once stops everything
+echo   Backend does NOT auto-reload - restart this script to pick up code changes
 echo ========================================
 echo.
 
-npm run dev
+cd /d %FRONTEND%
+call npm run dev
+
+echo.
+echo Shutting down backend on port 8000...
+for /f "tokens=5" %%p in ('netstat -ano ^| findstr /r /c:"LISTENING" ^| findstr ":8000 "') do (
+  taskkill /f /pid %%p >nul 2>&1
+)
+echo Done.
+endlocal

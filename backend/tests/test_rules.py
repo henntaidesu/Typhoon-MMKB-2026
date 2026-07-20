@@ -24,6 +24,8 @@ _BACKEND = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if _BACKEND not in sys.path:
     sys.path.insert(0, _BACKEND)
 
+from tests._kb import requires_kb  # noqa: E402
+
 from crawler.load import (  # noqa: E402
     _MAX_NAME_MATCH_DEG, _public_title, _strip_suffix,
 )
@@ -176,20 +178,7 @@ class NameNormalizationTest(unittest.TestCase):
 
 
 # --- Data invariants -------------------------------------------------------
-def _engine_or_none():
-    try:
-        from db import engine
-        with engine.connect() as c:
-            c.exec_driver_sql("select 1")
-        return engine
-    except Exception:  # noqa: BLE001 — the KB is optional for the pure tests
-        return None
-
-
-_ENGINE = _engine_or_none()
-
-
-@unittest.skipIf(_ENGINE is None, "knowledge base not reachable")
+@requires_kb
 class KnowledgeBaseInvariantTest(unittest.TestCase):
     """Properties the loaded KB must hold. These are the regression net for the
     ingest rules — they fail on the next crawl if a loader change reintroduces

@@ -30,6 +30,7 @@ export default {
   getTyphoon: (id) => get(`/typhoons/${id}`),
   getTrack: (id) => get(`/typhoons/${id}/track`),
   getDisasters: (id) => get(`/typhoons/${id}/disasters`),
+  getPublicInfo: (id) => get(`/typhoons/${id}/public-info`),
   getRegions: (id) => get(`/typhoons/${id}/affected-regions`),
   // body: { q, k, bbox?, date_from?, date_to?, max_distance? }
   semantic: (body) => post('/search/semantic', { k: 10, ...body }),

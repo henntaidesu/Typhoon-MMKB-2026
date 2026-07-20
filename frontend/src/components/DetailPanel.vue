@@ -51,14 +51,32 @@
       <li class="empty">{{ $t('detail.noRecords') }}</li>
     </ul>
 
-    <h4>{{ $t('detail.disasters') }} ({{ disasterCount }})</h4>
+    <!-- 受灾情报: damage that actually occurred (the `secondary_disaster` table —
+         "二次灾害" was a second name for the same records). -->
+    <h4>{{ $t('detail.disasters') }} ({{ disasters.length }})</h4>
     <ul class="dis">
       <li v-for="d in disasters" :key="d.properties.id">
         <b>{{ d.properties.disaster_type }}</b>
         <span v-if="d.properties.casualties"> · {{ $t('detail.casualties') }} {{ d.properties.casualties }}</span>
-        <div class="d">{{ (d.properties.description || '').slice(0, 120) }}</div>
+        <div class="d">{{ clip(d.properties.description) }}</div>
+        <a v-if="d.properties.source_url" class="src" :href="d.properties.source_url"
+           target="_blank" rel="noopener">{{ d.properties.source || $t('detail.sourceLink') }}</a>
       </li>
       <li v-if="!disasters.length" class="empty">{{ $t('detail.noRecords') }}</li>
+    </ul>
+
+    <!-- 公共情报: what the authorities announced, as opposed to what happened. -->
+    <h4>{{ $t('detail.publicInfo') }} ({{ publicInfos.length }})</h4>
+    <ul class="dis">
+      <li v-for="p in publicInfos" :key="'p' + p.id">
+        <b>{{ p.info_type }}</b>
+        <span v-if="p.severity"> · {{ p.severity }}</span>
+        <span v-if="p.agency" class="agency"> · {{ p.agency }}</span>
+        <div class="d">{{ clip(p.title || p.body) }}</div>
+        <a v-if="p.source_url" class="src" :href="p.source_url"
+           target="_blank" rel="noopener">{{ $t('detail.sourceLink') }}</a>
+      </li>
+      <li v-if="!publicInfos.length" class="empty">{{ $t('detail.noRecords') }}</li>
     </ul>
   </div>
 </template>
@@ -70,8 +88,19 @@ const store = useTyphoonStore()
 const t = computed(() => store.selected)
 const pts = computed(() => store.trackPoints)
 const disasters = computed(() => store.disasters?.features || [])
-const disasterCount = computed(() => disasters.value.length)
+// The endpoint splits 公共情报 into located features and an `unlocated` list;
+// the panel is a list, so both belong in it — only the map cares about geometry.
+const publicInfos = computed(() => {
+  const fc = store.publicInfos
+  if (!fc) return []
+  return [...(fc.features || []).map((f) => f.properties), ...(fc.unlocated || [])]
+})
 const countries = computed(() => store.countries || [])
+
+function clip(s) {
+  const text = (s || '').replace(/\s+/g, ' ').trim()
+  return text.length > 120 ? text.slice(0, 120) + '…' : text
+}
 
 // Countries and provinces open by default; the admin-2 tier is collapsed since
 // it routinely runs to several hundred entries.
@@ -138,6 +167,9 @@ td:first-child { color: #6b7787; width: 78px; }
 .dis { list-style: none; padding: 0; margin: 6px 0 0; }
 .dis li { padding: 7px 0; border-bottom: 1px solid #eef1f5; font-size: 13px; }
 .dis .d { color: #6b7787; font-size: 12px; margin-top: 2px; }
+.dis .agency { color: #6b7787; }
+.dis .src { font-size: 11px; color: var(--accent); text-decoration: none; }
+.dis .src:hover { text-decoration: underline; }
 .dis .empty { color: #98a4b3; }
 .regs { list-style: none; padding: 0; margin: 6px 0 0; display: flex; flex-wrap: wrap; gap: 6px; }
 .regs li { font-size: 12px; background: #f0f4f9; border-radius: 6px; padding: 3px 8px; color: #33435a; }

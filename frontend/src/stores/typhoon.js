@@ -7,7 +7,8 @@ export const useTyphoonStore = defineStore('typhoon', {
     filters: { year: null, name: '', min_wind: null },
     selectedId: null,
     track: null,         // GeoJSON Feature (LineString)
-    disasters: null,     // GeoJSON FeatureCollection
+    disasters: null,     // 受灾情报 GeoJSON FeatureCollection
+    publicInfos: null,   // 公共情报 FeatureCollection + `unlocated` (records with no geometry)
     regions: null,       // GeoJSON FeatureCollection
     countries: [],       // affected admin regions [{name, iso_a3, landfall, ...}]
     landfalls: null,     // GeoJSON FeatureCollection (landfall points)
@@ -55,16 +56,19 @@ export const useTyphoonStore = defineStore('typhoon', {
       this.selectedId = id
       this.timeIndex = 0
       this.track = this.disasters = this.regions = this.landfalls = null
+      this.publicInfos = null
       this.countries = []
       try {
-        const [track, disasters, regions, countries, landfalls] = await Promise.all([
+        const [track, disasters, publicInfos, regions, countries, landfalls] = await Promise.all([
           api.getTrack(id).catch(() => null),
           api.getDisasters(id).catch(() => null),
+          api.getPublicInfo(id).catch(() => null),
           api.getRegions(id).catch(() => null),
           api.typhoonCountries(id).catch(() => []),
           api.typhoonLandfalls(id).catch(() => null),
         ])
         this.track = track; this.disasters = disasters; this.regions = regions
+        this.publicInfos = publicInfos
         this.countries = countries || []; this.landfalls = landfalls
         this.timeIndex = (track?.properties?.points?.length || 1) - 1
       } catch (e) { this.error = String(e) }
