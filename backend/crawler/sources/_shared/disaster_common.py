@@ -125,9 +125,21 @@ def classify_type(text: str, default: str = "wind_impact") -> str:
 
 # --- Typhoon-name extraction from a report title/disaster name ----------------
 # ReliefWeb disaster names look like "Philippines: Typhoon Doksuri - Jul 2023";
-# CN bulletins like "台风“杜苏芮”". We pull the roman/quoted storm name.
-_RE_NAME_EN = re.compile(r"(?:typhoon|super typhoon|tropical storm|cyclone)\s+([A-Za-z\-]+)", re.I)
-_RE_NAME_CN = re.compile(r"台风[“\"']?([一-龥A-Za-z]+)[”\"']?")
+# CN bulletins like "台风“杜苏芮”".
+# The trailing [A-Za-z] stops the capture eating the hyphen that separates a
+# GDACS name from its season ("MAN-YI-13" would otherwise yield "Man-Yi-").
+_RE_NAME_EN = re.compile(
+    r"(?:typhoon|super typhoon|tropical storm|cyclone)\s+([A-Za-z](?:[A-Za-z\-]*[A-Za-z])?)", re.I)
+
+# The Chinese name must come from inside the quotes, never from the text next to
+# the word 台风. Anchoring on 台风 and taking the characters that follow reads
+# 防台风四级应急响应 as a storm called 四级应急响应, and 指导浙江做好“巴威”台风灾害救助工作
+# as one called 灾害救助工作 — both of which then fail to resolve and send the
+# record down the guess-by-time path. Bulletins always quote the name, and it
+# may sit on either side of 台风, so match the quotes and accept both orders.
+_CJK = r"一-鿿぀-ヿ"
+_QUOTED = r"[“\"'「『]([" + _CJK + r"A-Za-z]{2,6})[”\"'」』]"
+_RE_NAME_CN = re.compile(r"(?:台风|台風|颱風)\s*" + _QUOTED + r"|" + _QUOTED + r"\s*(?:台风|台風|颱風)")
 
 
 def extract_typhoon_name(text: str) -> str | None:
@@ -136,5 +148,6 @@ def extract_typhoon_name(text: str) -> str | None:
         return m.group(1).strip().title()
     m = _RE_NAME_CN.search(text or "")
     if m:
-        return m.group(1).strip()
+        # One alternative captures before 台风, the other after; exactly one fires.
+        return (m.group(1) or m.group(2)).strip()
     return None

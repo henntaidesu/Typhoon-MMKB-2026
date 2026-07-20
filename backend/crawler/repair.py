@@ -19,7 +19,7 @@ if _BACKEND not in sys.path:
     sys.path.insert(0, _BACKEND)
 
 from crawler.load import (  # noqa: E402
-    _BODY_PREFIX, _MAX_NAME_MATCH_DEG, _track_distance_expr,
+    _BODY_PREFIX, _MAX_NAME_MATCH_DEG, _match_typhoon, _track_distance_expr,
 )
 from db import SessionLocal  # noqa: E402
 from models import PublicInfo, SecondaryDisaster, TrackPoint, Typhoon  # noqa: E402
@@ -159,8 +159,139 @@ def drop_offbasin_records(dry_run: bool = False) -> dict[str, int]:
     return out
 
 
+def backfill_chinese_names(emit=print) -> int:
+    """Fill `Typhoon.name_cn` from the CMA season rosters.
+
+    CMA publishes the Chinese name next to the English one, but the crawler only
+    ever read the English column, so every row landed with name_cn NULL — which
+    silently disabled the CN branch of `_match_typhoon` for the whole KB. New
+    crawls carry it now; this brings the existing rows up to date.
+
+    Rosters only (no tracks), one cheap request per season."""
+    from sqlalchemy import func
+
+    from crawler.sources.china.typhoon import cma
+
+    n = 0
+    with SessionLocal() as s:
+        years = [y for (y,) in s.execute(
+            select(Typhoon.season_year).where(Typhoon.season_year.isnot(None))
+            .distinct().order_by(Typhoon.season_year.desc())).all()]
+        current = s.scalar(select(func.max(Typhoon.season_year)))
+        for y in years:
+            # The current season lives on list_default; past ones on list_{year}.
+            roster = (cma.fetch_current_roster(emit=lambda m: None) if y == current
+                      else cma.fetch_year_roster(y, emit=lambda m: None))
+            by_id = {e["intl_id"]: e.get("name_cn") for e in roster if e.get("name_cn")}
+            if not by_id:
+                continue
+            for t in s.scalars(select(Typhoon).where(Typhoon.season_year == y)):
+                cn = by_id.get(t.intl_id)
+                if cn and t.name_cn != cn:
+                    t.name_cn = cn
+                    n += 1
+            s.commit()
+            emit(f"  {y}: {len(by_id)} named storms in roster, {n} filled so far")
+    return n
+
+
+def reattribute_named_bulletins(dry_run: bool = False) -> dict[str, int]:
+    """Re-resolve records whose text names a storm, now that names can resolve.
+
+    Bulletins from 应急管理部 / 中央气象台 carry no coordinates, so before the name
+    could be read they fell through to "whichever storm was active nearest this
+    date" — which put 台风“巴威” bulletins on Haishen. With the quoted name now
+    extracted and `name_cn` populated, each such record can be re-pointed at the
+    storm it actually names; ones that still don't resolve are detached rather
+    than left on a storm they demonstrably do not describe."""
+    from crawler.sources._shared.disaster_common import extract_typhoon_name
+
+    out = {"moved": 0, "detached": 0, "unchanged": 0}
+    with SessionLocal() as s:
+        for model, text_cols in ((SecondaryDisaster, ("description",)),
+                                 (PublicInfo, ("title", "body"))):
+            rows = s.scalars(
+                select(model).where(model.lat.is_(None), model.source.in_(("MEM", "NMC")))
+            ).all()
+            for row in rows:
+                text = " ".join(str(getattr(row, c) or "") for c in text_cols)
+                name = extract_typhoon_name(text)
+                if not name:
+                    out["unchanged"] += 1
+                    continue
+                # The season is essential: storm names are recycled every few
+                # years, so 台风“格美” alone matches Kaemi 2006 as readily as
+                # Gaemi 2024. The bulletin's own timestamp decides; the storm it
+                # currently hangs on is the fallback, since the time-based guess
+                # that put it there at least landed in the right season.
+                stamp = getattr(row, "publish_time", None) or getattr(row, "event_time", None)
+                year = stamp.year if stamp else None
+                if year is None:
+                    year = s.scalar(select(Typhoon.season_year)
+                                    .where(Typhoon.id == row.typhoon_id))
+                target = _match_typhoon(s, name, year)
+                if target is None:
+                    if not dry_run:
+                        s.delete(row)
+                    out["detached"] += 1
+                elif target.id != row.typhoon_id:
+                    if not dry_run:
+                        row.typhoon_id = target.id
+                    out["moved"] += 1
+                else:
+                    out["unchanged"] += 1
+        if not dry_run:
+            s.commit()
+    return out
+
+
+def flag_landfall_at_every_level(dry_run: bool = False) -> int:
+    """Set `landfall` on impact rows whose region contains a landfall point.
+
+    The enricher used to flag only the most-specific region plus its country, so
+    when a landfall resolved to an admin-2 city the province in between was left
+    unflagged — the detail panel showed 「China 登陆 / Zhejiang — / Wenzhou 登陆」.
+    enrich.py now flags every containing level; this repairs what is already
+    stored without re-deriving all 1900-odd landfalls.
+    """
+    from sqlalchemy import text
+    sql = text("""
+        UPDATE typhoon_region_impact i
+           SET landfall = true,
+               landfall_time = COALESCE(i.landfall_time, lf.t)
+          FROM (SELECT l.typhoon_id, a.id AS region_id, MIN(l.landfall_time) AS t
+                  FROM landfall l
+                  JOIN admin_region a ON ST_Contains(a.geom, l.geom)
+                 WHERE l.geom IS NOT NULL
+                 GROUP BY l.typhoon_id, a.id) lf
+         WHERE i.typhoon_id = lf.typhoon_id
+           AND i.admin_region_id = lf.region_id
+           AND COALESCE(i.landfall, false) = false
+    """)
+    count_sql = text("""
+        SELECT count(*) FROM typhoon_region_impact i
+          JOIN landfall l ON l.typhoon_id = i.typhoon_id AND l.geom IS NOT NULL
+          JOIN admin_region a ON a.id = i.admin_region_id AND ST_Contains(a.geom, l.geom)
+         WHERE COALESCE(i.landfall, false) = false
+    """)
+    with SessionLocal() as s:
+        n = s.scalar(count_sql)
+        if not dry_run:
+            s.execute(sql)
+            s.commit()
+    return n or 0
+
+
 if __name__ == "__main__":
     dry = "--dry-run" in sys.argv
+    if "--landfall-levels" in sys.argv:
+        n = flag_landfall_at_every_level(dry_run=dry)
+        print(f"[repair] impact rows to flag as landfall{' (dry run)' if dry else ''}: {n}")
+        sys.exit(0)
+    if "--names" in sys.argv:
+        print(f"[repair] filled {backfill_chinese_names()} Chinese names")
+        print(f"[repair] re-attribution: {reattribute_named_bulletins(dry_run=dry)}")
+        sys.exit(0)
     offbasin = drop_offbasin_records(dry_run=dry)
     print(f"[repair] off-basin rows{' (dry run)' if dry else ''}: {offbasin}")
     if dry:

@@ -26,6 +26,9 @@
 ```bash
 start.bat                                  # 后端 :8000 + 前端 :5173（后端不热重载，改代码要重启那个窗口）
 
+cd frontend
+npm test                                   # vitest：store 的请求时序（竞态）
+
 cd backend
 python -m unittest discover -s tests -t .  # 规则测试 + 数据不变式
 python crawler/repair.py --dry-run         # 只报告将清理的错配记录，不写库

@@ -21,6 +21,7 @@ The gazetteer is built once from the DB and cached in-process (rebuild with
 from __future__ import annotations
 
 import os
+import re
 import sys
 import threading
 from dataclasses import dataclass
@@ -68,6 +69,22 @@ def _stem(name: str) -> str | None:
 
 def _is_cjk(s: str) -> bool:
     return any("㐀" <= ch <= "鿿" or "가" <= ch <= "힣" for ch in s)
+
+
+def _alias_in(alias: str, text: str) -> bool:
+    """Whether `alias` occurs in `text` as a name rather than as a fragment.
+
+    CJK is written without spaces, so a plain substring test is all there is.
+    Latin needs two extra constraints, because ordinary English words are also
+    region names here: word boundaries (Myanmar's state "Chin" is a substring
+    of "Chinese") and case (Hong Kong's districts are named Eastern, Central
+    and Southern, so "eastern China" must not resolve to one). English marks
+    proper nouns with a capital; matching case-insensitively discards the only
+    signal that separates the place from the adjective."""
+    if _is_cjk(alias):
+        return alias in text
+    pattern = r"\b" + re.escape(alias) + r"\b"
+    return re.search(pattern, text) is not None
 
 
 def _min_len_ok(alias: str) -> bool:
@@ -125,6 +142,11 @@ def _build() -> list[_Entry]:
     return entries
 
 
+def _country_aliases(entries: list[_Entry]) -> frozenset[str]:
+    """Every alias belonging to an admin-0 region, lower-cased."""
+    return frozenset(a.lower() for e in entries if e.admin_level == 0 for a in e.aliases)
+
+
 def gazetteer() -> list[_Entry]:
     global _gazetteer
     if _gazetteer is None:
@@ -157,15 +179,22 @@ def geocode(text: str, country_hint: str | None = None) -> GeoHit | None:
     tie-breaker that favors regions in that country."""
     if not text:
         return None
+    entries = gazetteer()
+    countries = _country_aliases(entries)
     best: _Entry | None = None
-    best_key = (-1, -1, 0)  # (admin_level, len(matched), country_bonus)
+    best_key = (-2, -1, 0)  # (level rank, len(matched), country_bonus)
     best_matched = ""
-    for e in gazetteer():
-        hit = next((a for a in e.aliases if a in text), None)
+    for e in entries:
+        hit = next((a for a in e.aliases if _alias_in(a, text)), None)
         if hit is None:
             continue
+        # Normally the most specific region wins. But a bare country name in
+        # prose means the country: Kagoshima has a town romanized "China", and
+        # ranking by specificity alone sent every English story about China to
+        # it. Demote a non-country region that matched only on a country's name.
+        rank = -1 if (e.admin_level > 0 and hit.lower() in countries) else e.admin_level
         bonus = 1 if (country_hint and e.country and country_hint in e.country) else 0
-        key = (e.admin_level, len(hit), bonus)
+        key = (rank, len(hit), bonus)
         if key > best_key:
             best_key, best, best_matched = key, e, hit
     if best is None:

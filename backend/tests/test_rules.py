@@ -176,6 +176,21 @@ class NameNormalizationTest(unittest.TestCase):
     def test_plain_name_passes_through(self):
         self.assertEqual(_strip_suffix("Nari"), "nari")
 
+    def test_hyphenated_names_survive(self):
+        """Splitting on the first hyphen cut every hyphen-named storm down to a
+        syllable — and the West Pacific is full of them. Combined with "a record
+        that names an unresolvable storm is dropped", that silently discarded
+        every GDACS report for these typhoons."""
+        for raw, want in (("Man-Yi-13", "man-yi"), ("Kong-Rey-24", "kong-rey"),
+                          ("Fung-Wong-25", "fung-wong"), ("In-Fa-21", "in-fa"),
+                          ("Choi-Wan", "choi-wan"), ("Nock-Ten-16", "nock-ten"),
+                          ("Yun-Yeung-23", "yun-yeung"), ("Son-Tinh-18", "son-tinh")):
+            self.assertEqual(_strip_suffix(raw), want, raw)
+
+    def test_only_a_trailing_season_is_stripped(self):
+        self.assertEqual(_strip_suffix("Ma-On"), "ma-on")
+        self.assertEqual(_strip_suffix("Chan-Hom-15"), "chan-hom")
+
 
 # --- Data invariants -------------------------------------------------------
 @requires_kb

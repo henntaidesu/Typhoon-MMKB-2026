@@ -189,8 +189,12 @@ def _record_landfall(session, typhoon, row, country_id, cand1_ids, cand2_ids, ca
     lf_lon, lf_lat = lon, lat
 
     # Most-specific region: prefer admin-2 (prefecture/city), then admin-1
-    # province, else the country.
+    # province, else the country. `containing` keeps every level the point falls
+    # in, not just the winner — "did a typhoon land here" is true of the province
+    # as much as of the city inside it, and flagging only the most-specific one
+    # left the middle tier blank (China 登陆 / Zhejiang — / Wenzhou 登陆).
     region_id = country_id
+    containing = {country_id}
     if cand1_ids:
         a1 = session.scalar(
             select(AdminRegion.id)
@@ -200,6 +204,7 @@ def _record_landfall(session, typhoon, row, country_id, cand1_ids, cand2_ids, ca
         )
         if a1 is not None:
             region_id = a1
+            containing.add(a1)
     if cand2_ids:
         a2 = session.scalar(
             select(AdminRegion.id)
@@ -209,6 +214,7 @@ def _record_landfall(session, typhoon, row, country_id, cand1_ids, cand2_ids, ca
         )
         if a2 is not None:
             region_id = a2
+            containing.add(a2)
 
     meta = cand_meta.get(region_id)
     country_meta = cand_meta.get(country_id)
@@ -220,8 +226,8 @@ def _record_landfall(session, typhoon, row, country_id, cand1_ids, cand2_ids, ca
         wind_kt=wind, pressure_hpa=pres, grade=grade,
         geom=f"SRID={SRID};POINT({lf_lon} {lf_lat})",
     ))
-    # Flag the resolved region (and its country) as a landfall region.
-    for rid in {region_id, country_id}:
+    # Flag every administrative level the landfall point falls inside.
+    for rid in containing:
         if rid in impacts:
             impacts[rid]["landfall"] = True
             if impacts[rid]["landfall_time"] is None:

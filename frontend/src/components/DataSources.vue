@@ -255,6 +255,7 @@ async function startUpdate() {
     updateState.status = 'running'
     updateState.message = t('sources.starting')
     busy.value = true
+    pollSoon()
   } catch (e) {
     alert(e.message || String(e))
   }
@@ -275,19 +276,46 @@ async function start(s, mode) {
   }
   if (mode) body.mode = mode      // 'new' | 'history' for temporal sources
   try {
-    const res = await api.startCrawl(s.key, body)
+    await api.startCrawl(s.key, body)
     s.state = { status: 'running', message: t('sources.starting'), counts: {} }
     busy.value = true
+    pollSoon()
   } catch (e) {
     alert(e.message || String(e))
   }
 }
 
+// Self-scheduling rather than setInterval, for two reasons.
+//
+// Overlap: a crawl holds the backend busy (the embedding model runs in-process),
+// so a status request can take longer than the interval. setInterval would keep
+// firing regardless, letting responses arrive out of order and a stale one push
+// a card from "done" back to "running".
+//
+// Rate: this page is idle most of the time — crawls are started by hand — so a
+// 1.5s heartbeat only earns its keep while something is actually running.
+const POLL_BUSY_MS = 1500
+const POLL_IDLE_MS = 10000
+let stopped = false
+
+function schedulePoll(delay = busy.value ? POLL_BUSY_MS : POLL_IDLE_MS) {
+  if (stopped) return
+  clearTimeout(timer)
+  timer = setTimeout(async () => {
+    await poll()
+    schedulePoll()
+  }, delay)
+}
+
+// Just-started crawl: the next tick may be sitting on the idle delay, so pull it
+// forward — otherwise the card would show nothing for ten seconds.
+function pollSoon() { schedulePoll(300) }
+
 onMounted(async () => {
   await loadList()
-  timer = setInterval(poll, 1500)
+  schedulePoll()
 })
-onUnmounted(() => clearInterval(timer))
+onUnmounted(() => { stopped = true; clearTimeout(timer) })
 </script>
 
 <style scoped>

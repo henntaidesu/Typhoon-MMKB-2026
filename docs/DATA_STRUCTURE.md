@@ -20,7 +20,9 @@ erDiagram
   TYPHOON {
     int id PK
     string intl_id "如 2306"
-    string name
+    string name "英文名"
+    string name_cn "中文名 如 巴威 (CMA)"
+    string name_jp "日文名"
     int season_year
     string category
     float max_wind_kt
@@ -118,7 +120,19 @@ erDiagram
 
 台风相关的非结构文本情报按**语义角色**分成两张对等的知识单元表，各自带
 PostGIS 几何 + pgvector 向量，都通过 `intl_id → 名称 → 时空邻近` 三级匹配挂到台风下
-（`backend/crawler/load.py`）：
+（`backend/crawler/load.py` 的 `_resolve_typhoon`）：
+
+三级之间不是简单的降级重试，每一级都带约束，否则会把情报挂到错误的台风上：
+
+- **名称匹配需要季节**。台风名循环复用（「Lola」出现在 17 个季节），只凭名字无法定位。
+- **名称匹配需要空间校验**。同一季节里不同洋盆会有同名气旋（东太飓风 Dora 与西太台风
+  Dora 同为 2023 年），故带坐标的记录还须落在轨迹附近。
+- **中日文公报只以本地名指称台风**（`台风“巴威”`），因此 `Typhoon.name_cn` /
+  `name_jp` 是这类情报唯一的匹配键 —— 中文名由 CMA 名单提供并写入。
+- **指名却解析不出时不做猜测**。记录既然写明了台风，名字对不上就说明该气旋不在本库
+  （多半属于其他洋盆），此时按时空「猜」一个最近的活跃台风只会制造错配。
+- 只有**完全不指名**的记录（如中央气象台的县级预警）才允许纯按时空归属，且必须落在
+  轨迹 4° 以内。
 
 | 表 | 语义 | 来源 (`source`) | 载入函数 |
 |---|---|---|---|

@@ -27,7 +27,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import L from 'leaflet'
 import { useTyphoonStore } from '../stores/typhoon'
@@ -114,6 +114,22 @@ onMounted(() => {
   }).addTo(map)
   map.on('moveend', publishBbox)
   publishBbox()
+})
+
+// This component is a route now, so it unmounts whenever the user navigates to
+// 统计 / 数据源. Without an explicit teardown Leaflet keeps the map, its tile
+// layer and its window-level listeners alive, and every return to the map builds
+// another one on top. Vue stops the watchers on its own; the Leaflet instance
+// and the pending flight are ours to clean up.
+onUnmounted(() => {
+  clearTimeout(flyTimer)
+  if (map) {
+    map.off('moveend', publishBbox)
+    map.remove()
+    map = null
+  }
+  trackLayer = regionLayer = disasterLayer = null
+  landfallLayer = publicLayer = searchLayer = cursor = cloudLayer = null
 })
 
 function clear(layer) { if (layer) { map.removeLayer(layer); } return null }
@@ -248,11 +264,17 @@ watch(() => store.searchPins, (pins) => {
   }
 })
 
-// Clicking a located search hit flies the map to it. Runs after the track's own
-// fitBounds (which the same click triggers), so it wins and the hit stays framed.
+// Clicking a located search hit flies the map to it. Deferred so it lands after
+// the track's own fitBounds, which the same click triggers. The handle is kept
+// so a rapid second click doesn't leave two flights racing, and so the callback
+// can't fire against a map this component has already torn down.
+let flyTimer = null
 watch(() => store.focus, (f) => {
   if (!f || !map) return
-  setTimeout(() => map.flyTo([f.lat, f.lon], Math.max(map.getZoom(), 6)), 300)
+  clearTimeout(flyTimer)
+  flyTimer = setTimeout(() => {
+    if (map) map.flyTo([f.lat, f.lon], Math.max(map.getZoom(), 6))
+  }, 300)
 })
 
 // Timeline playback: show a pulsing cursor at the current track index.

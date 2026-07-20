@@ -146,6 +146,32 @@ class StatsEndpointAgreementTest(unittest.TestCase):
             pins = {f["properties"]["id"] for f in self._map(level)["features"]}
             self.assertEqual(bars, pins, f"level {level}: bar list and map disagree")
 
+    def test_the_landfall_flag_agrees_with_the_geometry_at_every_level(self):
+        """A landfall in Wenzhou is a landfall in Zhejiang and in China. Flagging
+        only the most-specific region plus its country left the middle tier blank,
+        which the detail panel renders as 「China 登陆 / Zhejiang — / Wenzhou 登陆」.
+        Stated both ways so neither over- nor under-flagging can creep back."""
+        from sqlalchemy import text
+        missing = self.session.scalar(text("""
+            SELECT count(*) FROM typhoon_region_impact i
+              JOIN landfall l ON l.typhoon_id = i.typhoon_id AND l.geom IS NOT NULL
+              JOIN admin_region a ON a.id = i.admin_region_id
+                                 AND ST_Contains(a.geom, l.geom)
+             WHERE COALESCE(i.landfall, false) = false
+        """))
+        self.assertEqual(missing, 0, f"{missing} regions contain a landfall but are not flagged")
+
+        spurious = self.session.scalar(text("""
+            SELECT count(*) FROM typhoon_region_impact i
+              JOIN admin_region a ON a.id = i.admin_region_id
+             WHERE i.landfall IS true
+               AND NOT EXISTS (SELECT 1 FROM landfall l
+                                WHERE l.typhoon_id = i.typhoon_id
+                                  AND l.geom IS NOT NULL
+                                  AND ST_Contains(a.geom, l.geom))
+        """))
+        self.assertEqual(spurious, 0, f"{spurious} regions flagged without a landfall inside")
+
     def test_level2_rows_all_have_an_actual_landfall(self):
         """The chart is titled 'most landfalls by region'; corridor-only regions
         would pad it with thousands of zero-length bars."""

@@ -61,6 +61,15 @@ def _name_of(row) -> str | None:
         else str(name_en).title()
 
 
+def _name_cn_of(row) -> str | None:
+    """CMA publishes the Chinese name beside the English one (row[2]: "BAVI" ->
+    "巴威"). Chinese official bulletins quote storms by this name and nothing
+    else, so it is the only key that can tie 台风“巴威” to storm 2609."""
+    cn = row[2] if len(row) > 2 else None
+    cn = str(cn).strip() if cn else ""
+    return cn or None
+
+
 def _parse_roster(rows, year: int | None = None) -> list[dict]:
     """Rows -> roster entries. Storms with a real WMO 编号 (4-digit YYNN) key on
     it. Pre-1963 storms carry the "1900" no-number sentinel; when a query year is
@@ -74,6 +83,7 @@ def _parse_roster(rows, year: int | None = None) -> list[dict]:
             status = str(row[7]).lower() if len(row) > 7 and row[7] is not None else ""
             out.append({
                 "intl_id": tfbh, "internal_id": row[0], "name": _name_of(row),
+                "name_cn": _name_cn_of(row),
                 "season": season_of(tfbh), "active": status == "start",
             })
         elif year is not None and tfbh == "1900":
@@ -87,6 +97,7 @@ def _parse_roster(rows, year: int | None = None) -> list[dict]:
         for i, row in enumerate(unnumbered, 1):
             out.append({
                 "intl_id": f"{yy:02d}{i:02d}", "internal_id": row[0], "name": _name_of(row),
+                "name_cn": _name_cn_of(row),
                 "season": year, "active": False,
             })
     return out
@@ -146,7 +157,8 @@ def fetch_view(entry: dict) -> AgencyStorm | None:
     if not points:
         return None
     return AgencyStorm(
-        intl_id=entry["intl_id"], name=entry["name"], season_year=entry["season"],
+        intl_id=entry["intl_id"], name=entry["name"],
+        name_cn=entry.get("name_cn"), season_year=entry["season"],
         category=strongest_grade(pt.grade for pt in points), points=points,
         active=entry["active"],
     )

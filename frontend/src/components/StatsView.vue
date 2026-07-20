@@ -290,6 +290,14 @@ function windColor(kt) {
   return '#3498db'
 }
 
+// Request sequencing, same reason as in the typhoon store: these fetches are
+// slow (the level-2 choropleth is ~1s) and the user can switch level or region
+// mid-flight. Without a token the slower earlier response lands last and the
+// view ends up labelled one thing while showing another.
+let levelSeq = 0    // the admin level: bar list + choropleth
+let regionSeq = 0   // the selected region's storm list
+let trackSeq = 0    // the single-storm playback track
+
 async function loadSummary() {
   const s = await api.stats()
   Object.assign(summary, s)
@@ -304,17 +312,23 @@ async function loadCountryBars() {
   }))
 }
 
-async function loadRegionBars() {
-  const rows = await api.statsByRegion({ level: level.value === 0 ? 1 : level.value })
+async function loadRegionBars(seq) {
+  // Capture the level this request is for: reading level.value again when the
+  // response arrives would label the rows against whatever level is current by
+  // then, not the one they describe.
+  const lvl = level.value === 0 ? 1 : level.value
+  const rows = await api.statsByRegion({ level: lvl })
+  if (seq !== levelSeq) return
   regionBars.value = rows.map((r) => ({
-    label: r.name + (r.parent_name ? ` (${r.parent_name})` : r.country && level.value !== 0 ? ` (${r.country})` : ''),
+    label: r.name + (r.parent_name ? ` (${r.parent_name})` : r.country && lvl !== 0 ? ` (${r.country})` : ''),
     value: r.landfall_count, id: r.admin_region_id,
   }))
 }
 
-async function loadChoropleth() {
+async function loadChoropleth(seq) {
   if (!map) return
   const fc = await api.landfallGeojson({ level: level.value })
+  if (seq !== levelSeq) return
   maxCount.value = fc.properties?.max_landfall_count || 0
   if (choroLayer) { map.removeLayer(choroLayer); choroLayer = null }
   choroLayer = L.geoJSON(fc, {
@@ -342,8 +356,11 @@ function choroStyle(f) {
 
 // Fetch the region's storms; landfall_only is the only server-side filter
 // (year/intensity are applied client-side for instant response).
-async function fetchTracks(fallbackName) {
+async function fetchTracks(fallbackName, seq = ++regionSeq) {
   const fc = await api.regionTracks(selectedId.value, { landfall_only: landfallOnly.value })
+  // A different region was clicked while this was in flight; writing now would
+  // list this region's storms under that region's heading.
+  if (seq !== regionSeq) return
   allFeatures.value = fc.features
   selected.value = { ...fc.properties, region_name: fc.properties.region_name || fallbackName }
 }
@@ -399,6 +416,9 @@ function highlight(tid) {
 }
 
 function clearSelection() {
+  // Bump the token: a region fetch still in flight would otherwise land after
+  // this and repopulate the panel the user just dismissed.
+  regionSeq += 1
   clearPlayback()
   selected.value = null
   selectedId.value = null
@@ -414,7 +434,9 @@ async function selectTyphoon(tid) {
   if (playbackId.value === tid) { clearPlayback(); return }  // click again → toggle off
   stopPlay()
   try {
+    const seq = ++trackSeq
     const tr = await api.getTrack(tid)
+    if (seq !== trackSeq) return  // a different storm was clicked meanwhile
     playbackId.value = tid
     playbackTrack.value = tr
     playIndex.value = 0
@@ -478,6 +500,9 @@ function stopPlay() {
 
 function clearPlayback() {
   stopPlay()
+  // Same reason as clearSelection: a track fetch in flight must not resurrect
+  // the playback that was just closed.
+  trackSeq += 1
   const wasActive = playbackId.value != null
   playbackId.value = null
   playbackTrack.value = null
@@ -517,8 +542,15 @@ function setLevel(l) {
   clearSelection()
 }
 
+// One token for the pair: the bar list and the choropleth describe the same
+// level, so a stale response to either must be dropped together.
+async function reloadLevel() {
+  const seq = ++levelSeq
+  await Promise.all([loadRegionBars(seq), loadChoropleth(seq)])
+}
+
 watch(level, async () => {
-  try { await Promise.all([loadRegionBars(), loadChoropleth()]) }
+  try { await reloadLevel() }
   catch (e) { err.value = String(e.message || e) }
 })
 
@@ -529,7 +561,7 @@ onMounted(async () => {
     attribution: '&copy; OpenStreetMap', maxZoom: 10,
   }).addTo(map)
   try {
-    await Promise.all([loadSummary(), loadCountryBars(), loadRegionBars(), loadChoropleth()])
+    await Promise.all([loadSummary(), loadCountryBars(), reloadLevel()])
   } catch (e) { err.value = String(e.message || e) }
 })
 onUnmounted(() => { stopPlay(); if (map) { map.remove(); map = null } })

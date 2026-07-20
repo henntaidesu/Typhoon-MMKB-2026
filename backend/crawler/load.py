@@ -91,9 +91,19 @@ def load_typhoons(records) -> int:
     return n
 
 
+# GDACS appends the two-digit season to the cyclone name: "DOKSURI-23". Only
+# that suffix may be stripped — splitting on the first hyphen instead would cut
+# every hyphenated storm name down to its first syllable, and the West Pacific
+# is full of them (Man-Yi, Kong-Rey, Fung-Wong, In-Fa, Choi-Wan, Nock-Ten...).
+# Those names would then never resolve, and a record that names its storm but
+# cannot resolve it is now dropped rather than guessed at — so this quietly
+# discarded every GDACS report for a hyphen-named typhoon.
+_SEASON_SUFFIX = re.compile(r"-\d{1,2}$")
+
+
 def _strip_suffix(name: str) -> str:
-    """'Doksuri-23' -> 'doksuri' for matching GDACS names to KB typhoons."""
-    return name.split("-")[0].strip().lower()
+    """'Doksuri-23' -> 'doksuri', 'Man-Yi-13' -> 'man-yi'."""
+    return _SEASON_SUFFIX.sub("", name.strip()).strip().lower()
 
 
 def _match_typhoon(session: Session, name: str | None, year: int | None) -> Typhoon | None:
@@ -104,7 +114,7 @@ def _match_typhoon(session: Session, name: str | None, year: int | None) -> Typh
     # so a bulletin that quotes 台风“巴威” / 台風「マーワー」 resolves as well as an
     # English "Typhoon Bavi". The English column is the common case; the local
     # columns catch CN/JP official bulletins (NMC / MEM / 消防庁).
-    orig = name.split("-")[0].strip()
+    orig = _SEASON_SUFFIX.sub("", name.strip()).strip()
     stmt = select(Typhoon).where(
         (func.lower(Typhoon.name) == base)
         | (Typhoon.name_cn == orig)
@@ -122,7 +132,15 @@ _PAD_BEFORE = timedelta(days=2)
 _PAD_AFTER = timedelta(days=7)
 # Max angular distance (degrees, ~110 km each) from a typhoon's observed track
 # for a located-but-unnamed warning to be tied to it.
-_MAX_MATCH_DEG = 3.0
+#
+# This used to be measured against the derived impact corridor — the track
+# buffered by ~1 degree — so the effective reach from the track itself was ~4.
+# Measuring from the track directly is the sounder test (some storms' corridors
+# inflate to tens of degrees), but keeping the old number would have quietly
+# tightened the rule and rejected warnings 3-4 degrees out: 湖北恩施 rain from a
+# storm making landfall in 浙江 is a real consequence of that storm, not a
+# mismatch. 4 degrees ~ 440 km, about the reach of a typhoon's rain shield.
+_MAX_MATCH_DEG = 4.0
 # Looser gate applied to a record that already matched by NAME. Storm names are
 # reused across basins in the same season (GDACS's East-Pacific "DORA-23" and
 # the West-Pacific typhoon Dora 2308), so a name match alone can be off by half
@@ -236,6 +254,13 @@ def _resolve_typhoon(session: Session, r) -> Typhoon | None:
     # storm in this West-Pacific KB. Guessing by time/space here is what filled
     # the KB with Atlantic and South-Pacific systems.
     if getattr(r, "named_event", False):
+        return None
+    # A bulletin that DOES name its storm has already told us which one it means.
+    # If that name won't resolve, the sensible answer is "unknown", not the storm
+    # that happened to be active — 应急管理部 bulletins about 台风“巴威” were landing
+    # on Haishen simply because Haishen's window sat nearer their publication
+    # date. Only records that name no storm at all may be placed by time/space.
+    if r.typhoon_name:
         return None
     return _match_typhoon_by_time_space(
         session, r.event_time, r.lat, r.lon, r.season_year
@@ -411,6 +436,8 @@ def _apply_meta(obj: Typhoon, st, agency: str, authoritative: bool) -> None:
             setattr(obj, attr, value)
 
     put("name", st.name)
+    put("name_cn", getattr(st, "name_cn", None))
+    put("name_jp", getattr(st, "name_jp", None))
     put("season_year", st.season_year)
     put("category", st.category)
     put("max_wind_kt", maxw)

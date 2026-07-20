@@ -29,6 +29,12 @@ class AgencyStorm:
     name: str | None
     season_year: int | None
     category: str | None
+    # Localized names, when the agency publishes them (CMA carries the Chinese
+    # name). Chinese and Japanese official bulletins quote the storm by its
+    # local name — 台风“巴威” — so without these such a bulletin cannot be tied
+    # to its storm and gets attributed by time alone.
+    name_cn: str | None = None
+    name_jp: str | None = None
     points: list[ObsPoint] = field(default_factory=list)
     active: bool | None = None   # still ongoing? (None = source doesn't say)
 

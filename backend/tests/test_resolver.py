@@ -114,15 +114,36 @@ class ResolveTyphoonTest(unittest.TestCase):
                            event_time=self.on_track.obs_time, named_event=True)
         self.assertIsNone(got)
 
-    def test_same_record_without_the_flag_falls_through_to_time_space(self):
-        """A bulletin that doesn't name its storm (NMC 预警) legitimately relies
-        on time and place — the flag is what separates the two cases."""
+    # --- naming a storm is itself a claim ----------------------------------
+    def test_an_unresolvable_name_is_not_guessed_at(self):
+        """A bulletin that names its storm has already said which one it means.
+        If that name won't resolve, the answer is "unknown" — not whichever storm
+        was active. 应急管理部 bulletins about 台风“巴威” were landing on Haishen
+        purely because Haishen's window sat nearer their publication date."""
         got = self.resolve(typhoon_name="Katrina", season_year=2019,
                            lat=self.on_track.lat, lon=self.on_track.lon,
                            event_time=self.on_track.obs_time, named_event=False)
+        self.assertIsNone(got)
+
+    def test_a_record_naming_no_storm_may_still_be_placed_by_time_and_space(self):
+        """The NMC 预警 case: no storm named, so time and place are all there is."""
+        got = self.resolve(lat=self.on_track.lat, lon=self.on_track.lon,
+                           event_time=self.on_track.obs_time)
         self.assertIsNotNone(got)
 
     # --- link 3: time/space -------------------------------------------------
+    def test_a_warning_a_few_degrees_off_the_track_still_belongs(self):
+        """A storm's rain shield reaches well past its centre line. The gate is
+        measured from the track, so its value has to allow for that — an earlier
+        version measured from the buffered corridor and a later one kept the same
+        number against the bare track, silently tightening the rule."""
+        from crawler.load import _MAX_MATCH_DEG
+        self.assertGreaterEqual(_MAX_MATCH_DEG, 4.0)
+        # ~3.5 degrees north of a mid-track fix: inland, but plainly this storm's.
+        got = self.resolve(lat=self.on_track.lat + 3.5, lon=self.on_track.lon,
+                           event_time=self.on_track.obs_time)
+        self.assertIsNotNone(got)
+
     def test_time_space_rejects_a_point_far_from_every_track(self):
         got = self.resolve(lat=0.0, lon=0.0,  # Gulf of Guinea
                            event_time=self.on_track.obs_time)

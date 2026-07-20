@@ -18,12 +18,23 @@ GET /search/spatiotemporal?bbox=120,20,135,30&date_from=2023-07-01&date_to=2023-
 ORM: `func.ST_Intersects(TrackPoint.geom, func.ST_MakeEnvelope(...))` + `obs_time` 过滤。
 
 ## 3. 语义联想查询 (Semantic Associative Selection)
-自然语言 → 向量 → pgvector 余弦 Top-K（跨中/日/英）。
+自然语言 → 向量 → pgvector 余弦排序（跨中/日/英），对**台风 / 受灾情报 / 公共情报**
+三层分别检索并分段返回。
 ```
 POST /search/semantic
 { "q": "造成严重洪水和滑坡的强台风", "k": 10 }
 ```
-ORM: `Typhoon.embedding.cosine_distance(qvec)` 排序取 Top-K。
+ORM: `Typhoon.embedding.cosine_distance(qvec)` 排序，另加三个环节（见 ARCHITECTURE.md）：
+
+- **意图判定** —— `"2019"` / `"2306"` / `"Hagibis"` 是查找而非描述，改走结构化列查询；
+  响应中的 `intent` 字段标明走了哪条路（`year` / `intl_id` / `name` / `semantic`）。
+- **相关度阈值** —— 余弦距离 > 0.60 视为无关并丢弃，所以「查无匹配」是一个真实答案
+  （可用 `max_distance` 覆盖）。
+- **关键词臂** —— 短查询（≤2 词且 ≤16 字符）并行做子串匹配；裸地名如「浙江」的向量
+  距离过不了阈值，但库中确有含该字串的记录。每条结果的 `match` 字段标明来源
+  （`exact` / `keyword` / `semantic`）。
+
+可选 `bbox` / `date_from` / `date_to` —— 给了就变成第 4 节的时空 × 语义结合查询。
 
 ## 4. 时空 × 语义 结合查询 (Spatio-temporal ∩ Semantic Join)
 先时空过滤候选，再语义排序 —— 体现「意味的結合」。
@@ -34,7 +45,8 @@ ORM: 子查询取时空候选 `typhoon_id`，外层 `where(Typhoon.id.in_(...))`
 
 ## 5. 统计聚合 (Aggregation, 前端图表)
 ```
-GET /search/stats   ->  { typhoons_by_year, disasters_by_type, top_countries, total_typhoons, total_disasters, total_landfalls }
+GET /search/stats   ->  { typhoons_by_year, disasters_by_type, public_info_by_type, top_countries,
+                          total_typhoons, total_disasters, total_public_info, total_landfalls }
 ```
 
 ## 6. 地理影响查询 (Geographic Impact — 新增)
